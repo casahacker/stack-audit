@@ -26,19 +26,28 @@ Ele foi projetado como uma ferramenta **open source** e extensível e modificáv
 
 ## Arquitetura simplificada
 
-```mermaid
-graph LR
-A[PDFs Brutos] --> B(Pré‑processamento)
-B --> C[Azure AI Document Intelligence]
-C --> D[Extração de Campos]
-D --> E[Motor de Conciliação]
-E --> F[Relatório de Auditoria]
-```
+O pipeline do Stack Audit foi projetado para receber documentos financeiros brutos e entregar dados estruturados e conciliados. Todo o processo se apoia no **Azure AI Document Intelligence** como único motor de extração inteligente.
 
-- **Pré‑processamento**: Converte páginas em imagens e ignora conteúdo corrompido.
-- **Document Intelligence**: Aplica modelos pré‑treinados (notas fiscais, boletos) e customizados conforme o tipo de documento.
-- **Motor de Conciliação**: Cruza pagamentos com notas fiscais usando chaves como valor, data e CNPJ.
-- **Relatório**: Dados consolidados em CSV/JSON e dashboards prontos para conferência.
+**1. Entrada e pré‑processamento**  
+A execução começa com o recebimento dos arquivos originais, que podem ser PDFs, imagens ou uma mistura de ambos.  
+Nesta etapa, o sistema converte todas as páginas em imagens padronizadas e descarta automaticamente conteúdo corrompido (como sequências de caracteres de controle que não representam informação útil). O resultado é um conjunto limpo de imagens prontas para análise.
+
+**2. Classificação e extração inteligente**  
+As imagens pré‑processadas são enviadas ao **Azure AI Document Intelligence**.  
+O serviço aplica modelos especializados de acordo com a natureza de cada documento:
+- **Modelo pré‑treinado de nota fiscal** para NFS‑e, capturando campos como CNPJ, valor, número e data;
+- **Modelo de documento geral** (ou customizado) para boletos bancários, recibos de reembolso e comprovantes de PIX, extraindo linha digitável, favorecido, valores e datas.
+
+Toda a extração retorna um JSON estruturado com os campos identificados e um índice de confiança para cada um deles.
+
+**3. Motor de conciliação**  
+Com os dados extraídos, o motor de conciliação entra em ação.  
+Ele cruza cada pagamento (identificado nos extratos e recibos) com as notas fiscais correspondentes, usando chaves como valor, data, CNPJ/CPF do favorecido e número do documento fiscal.  
+Pagamentos que não encontram uma nota fiscal equivalente são sinalizados como inconformidades para revisão manual.
+
+**4. Geração de relatórios**  
+O último estágio consolida todas as informações em relatórios prontos para conferência.  
+O sistema exporta os dados nos formatos CSV, JSON e Excel, incluindo uma tabela de status que indica quais transações estão OK e quais precisam de atenção. Esses relatórios podem ser usados diretamente por auditores ou integrados a sistemas de gestão financeira.
 
 ## Funcionalidades
 
