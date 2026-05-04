@@ -966,6 +966,34 @@ export default function App() {
           <section className="px-10 py-8 animate-in fade-in slide-in-from-right-4 duration-500 overflow-y-auto pb-24">
             <VerdictBanner result={lastAuditResult} />
 
+            {/* Share link bar */}
+            {lastAuditResult.shareToken && (
+              <div className="flex items-center justify-between gap-4 mb-8 px-5 py-3 bg-card border border-line rounded-lg">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Link2 size={14} className="text-primary shrink-0" />
+                  <span className="text-[11px] text-text-secondary font-mono truncate">
+                    {`${window.location.origin}/share/${lastAuditResult.shareToken}`}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/share/${lastAuditResult.shareToken}`);
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                  }}
+                  className={cn(
+                    'shrink-0 flex items-center gap-2 px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded border transition-all',
+                    linkCopied
+                      ? 'border-success/40 bg-success/10 text-success'
+                      : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'
+                  )}
+                >
+                  <Link2 size={11} />
+                  {linkCopied ? 'Copiado!' : 'Copiar link público'}
+                </button>
+              </div>
+            )}
+
             {/* Metrics */}
             <div className="grid grid-cols-4 gap-6 mb-10">
               <MetricCard label="Itens Auditados" value={lastAuditResult.metrics?.totalItems ?? 0} sub="Extensão total da lista" />
@@ -1268,6 +1296,17 @@ export default function App() {
                       {item.verdict}
                     </div>
                     <div className="flex items-center justify-end gap-2">
+                      {item.shareToken && (
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/share/${item.shareToken}`);
+                          }}
+                          className="p-1.5 hover:bg-primary/20 rounded text-text-secondary hover:text-primary transition-colors"
+                          title="Copiar link público"
+                        >
+                          <Link2 size={13} />
+                        </button>
+                      )}
                       <button
                         onClick={async () => {
                           try {
