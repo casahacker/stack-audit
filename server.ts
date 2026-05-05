@@ -203,7 +203,35 @@ app.get("/api/cnpj/:cnpj", requireAuth, async (req, res) => {
     }
   } catch (_) { /* fallback below */ }
 
-  // Fallback: ReceitaWS (same shape as CNPJData, no normalization needed)
+  // Fallback: ReceitaWS — normalize to same CNPJData shape
+  const normalizeReceitaWs = (d: any) => ({
+    razao_social: d.nome,
+    nome_fantasia: d.fantasia,
+    situacao_cadastral: d.situacao,
+    data_situacao_cadastral: d.data_situacao,
+    tipo: d.tipo,
+    natureza_juridica: typeof d.natureza_juridica === 'object' ? d.natureza_juridica?.descricao : d.natureza_juridica,
+    abertura: d.abertura,
+    capital_social: d.capital_social,
+    porte: d.porte,
+    logradouro: d.logradouro,
+    numero: d.numero,
+    complemento: d.complemento,
+    bairro: d.bairro,
+    municipio: d.municipio,
+    uf: d.uf,
+    cep: d.cep,
+    telefone: d.telefone,
+    email: d.email,
+    atividade_principal: Array.isArray(d.atividade_principal) ? d.atividade_principal : [],
+    atividades_secundarias: Array.isArray(d.atividades_secundarias) ? d.atividades_secundarias : [],
+    qsa: Array.isArray(d.qsa)
+      ? d.qsa.map((s: any) => ({ nome_socio: s.nome, qualificacao_socio: s.qual }))
+      : [],
+    simples_optante: d.simples?.optante != null ? (d.simples.optante ? 'Sim' : 'Não') : undefined,
+    simei_optante: d.simei?.optante != null ? (d.simei.optante ? 'Sim' : 'Não') : undefined,
+  });
+
   try {
     const r2 = await fetch(`https://www.receitaws.com.br/v1/cnpj/${digits}`, {
       headers: { "Accept": "application/json" },
@@ -213,7 +241,7 @@ app.get("/api/cnpj/:cnpj", requireAuth, async (req, res) => {
       return res.status(r2.status).json({ error: "Erro ao consultar CNPJ", status: r2.status });
     }
     const data2 = await r2.json();
-    return res.json(data2);
+    return res.json(normalizeReceitaWs(data2));
   } catch (e: any) {
     return res.status(502).json({ error: "Falha ao consultar CNPJ", detail: e.message });
   }

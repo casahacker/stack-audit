@@ -1725,11 +1725,13 @@ export default function App() {
                       const labelMap: Record<string, string> = {
                         razao_social: 'Razão Social', nome_fantasia: 'Nome Fantasia', situacao_cadastral: 'Situação Cadastral',
                         data_situacao_cadastral: 'Data Situação', tipo: 'Tipo', natureza_juridica: 'Natureza Jurídica',
-                        abertura: 'Data de Abertura', capital_social: 'Capital Social',
+                        abertura: 'Data de Abertura', capital_social: 'Capital Social', porte: 'Porte',
                         logradouro: 'Logradouro', numero: 'Número', complemento: 'Complemento',
                         bairro: 'Bairro', municipio: 'Município', uf: 'UF', cep: 'CEP',
                         telefone: 'Telefone', email: 'E-mail',
+                        simples_optante: 'Optante Simples Nacional', simei_optante: 'Optante SIMEI',
                       };
+                      const qsa: any[] = cnpjData.qsa || [];
                       return (
                         <div className="mt-4 border-t border-line pt-4">
                           <div className="flex items-center justify-between mb-3">
@@ -1739,19 +1741,44 @@ export default function App() {
                             <button onClick={() => setShowCnpjPanel(false)} className="text-text-secondary hover:text-text text-[10px]"><X size={13} /></button>
                           </div>
                           <div className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2 text-[11px]">
-                            {Object.entries(cnpjData).filter(([k, v]) => v && !Array.isArray(v) && k !== 'cnpj').map(([k, v]) => (
-                              <div key={k} className="contents">
-                                <dt className="text-text-secondary text-[10px] font-semibold uppercase tracking-wider pt-0.5 self-start">{labelMap[k] || k.replace(/_/g,' ')}</dt>
-                                <dd className="text-text font-mono text-[10px] break-words uppercase">{String(v)}</dd>
-                              </div>
-                            ))}
+                            {/* Scalar fields only — skip arrays and objects */}
+                            {Object.entries(cnpjData)
+                              .filter(([k, v]) => v != null && v !== '' && typeof v !== 'object' && k !== 'cnpj')
+                              .map(([k, v]) => (
+                                <div key={k} className="contents">
+                                  <dt className="text-text-secondary text-[10px] font-semibold uppercase tracking-wider pt-0.5 self-start">{labelMap[k] || k.replace(/_/g,' ')}</dt>
+                                  <dd className="text-text font-mono text-[10px] break-words uppercase">{String(v)}</dd>
+                                </div>
+                              ))}
+                            {/* CNAE Principal */}
                             {cnpjData.atividade_principal?.length ? (
                               <div className="contents">
                                 <dt className="text-text-secondary text-[10px] font-semibold uppercase tracking-wider pt-0.5 self-start">CNAE Principal</dt>
                                 <dd className="text-text font-mono text-[10px] break-words uppercase">{cnpjData.atividade_principal.map((a: any) => `${a.code} — ${a.text}`).join('; ')}</dd>
                               </div>
                             ) : null}
+                            {/* CNAEs Secundários */}
+                            {cnpjData.atividades_secundarias?.filter((a: any) => a.code && a.code !== '00.00-0-00').length ? (
+                              <div className="contents">
+                                <dt className="text-text-secondary text-[10px] font-semibold uppercase tracking-wider pt-0.5 self-start">CNAEs Secundários</dt>
+                                <dd className="text-text font-mono text-[10px] break-words uppercase">{cnpjData.atividades_secundarias.filter((a: any) => a.code !== '00.00-0-00').map((a: any) => `${a.code} — ${a.text}`).join(' | ')}</dd>
+                              </div>
+                            ) : null}
                           </div>
+                          {/* QSA */}
+                          {qsa.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-line/50">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary mb-2">Quadro Societário (QSA)</p>
+                              <div className="space-y-1">
+                                {qsa.map((s: any, i: number) => (
+                                  <div key={i} className="flex gap-2 text-[10px] font-mono">
+                                    <span className="text-text uppercase">{s.nome_socio || s.nome || '—'}</span>
+                                    {(s.qualificacao_socio || s.qual) && <span className="text-text-secondary">— {s.qualificacao_socio || s.qual}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
