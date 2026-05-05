@@ -25,6 +25,7 @@ export interface CNPJData {
 
 export interface AuditItem {
   id: number;
+  itemCode?: string;
   description: string;
   activity: string;
   date: string;

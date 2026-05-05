@@ -520,6 +520,39 @@ app.get("/api/audits/:id/files/:filename", requireAuth, (req, res) => {
   res.download(filePath);
 });
 
+// ── API: item deep link by itemCode (requires auth) ──────────────────────────
+
+app.get("/api/items/:code", requireAuth, (req, res) => {
+  const { code } = req.params;
+  if (!code || code.length < 6) return res.status(400).json({ error: "Código inválido" });
+  if (!fs.existsSync(AUDITS_DIR)) return res.status(404).json({ error: "Item não encontrado" });
+
+  const dirs = fs.readdirSync(AUDITS_DIR).filter(d =>
+    fs.statSync(path.join(AUDITS_DIR, d)).isDirectory()
+  );
+
+  for (const dir of dirs) {
+    const resultPath = path.join(AUDITS_DIR, dir, "result.json");
+    if (!fs.existsSync(resultPath)) continue;
+    try {
+      const result = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+      const item = (result.items || []).find((i: any) => i.itemCode === code);
+      if (item) {
+        return res.json({
+          auditId: result.id,
+          contractNumber: result.contractNumber,
+          organization: result.organization,
+          periodStart: result.periodStart,
+          periodEnd: result.periodEnd,
+          item,
+        });
+      }
+    } catch { continue; }
+  }
+
+  res.status(404).json({ error: "Lançamento não encontrado" });
+});
+
 // ── API: public share link ────────────────────────────────────────────────────
 
 app.get("/api/share/:token", (req, res) => {

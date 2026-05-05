@@ -42,6 +42,7 @@ function parseJsonSafe(text: string): any {
 function normalizeItem(item: any, idx: number, globalOffset: number) {
   return {
     id: globalOffset + idx + 1,
+    itemCode: crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase(),
     description: item.description || "Sem descrição informada",
     activity: item.activity || "Não Informado",
     date: item.date || "N/A",
@@ -79,6 +80,7 @@ function fallbackFromCsvRow(row: any, globalIdx: number) {
   if (lastSep > -1) valStr = valStr.substring(0, lastSep).replace(/[.,]/g, "") + "." + valStr.substring(lastSep + 1);
   return {
     id: globalIdx + 1,
+    itemCode: crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase(),
     description: String(getVal(["despesa", "descri", "historico", "item", "lancamento"]) || Object.values(row).find((x: any) => x && isNaN(Number(x)) && String(x).length > 5) || "Sem descrição"),
     activity: String(getVal(["atividade", "rubrica", "categoria"]) || "Não Informado"),
     date: String(getVal(["data", "emissao", "pagamento"]) || "N/A"),

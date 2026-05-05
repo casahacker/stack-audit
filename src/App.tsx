@@ -256,6 +256,26 @@ export default function App() {
       .catch(() => setAuthLoading(false));
   }, []);
 
+  // ── Item deep link: ?item=XXXXXXXX ──────────────────────────────────────────
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('item');
+    if (!code || !user) return;
+    fetch(`/api/items/${code}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        // Load the full audit then open the item modal
+        fetch(`/api/audits/${data.auditId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(audit => {
+            if (audit) setLastAuditResult(audit);
+            setSelectedItem(data.item);
+            setActiveSection('resultado');
+          });
+      })
+      .catch(() => {});
+  }, [user]);
+
   // ── History API ─────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -507,7 +527,7 @@ export default function App() {
           )}
         </header>
 
-        <main className="px-6 sm:px-10 py-8 max-w-screen-xl mx-auto pb-24">
+        <main className="px-6 sm:px-8 py-8 pb-24">
           {shareLoading && (
             <div className="flex items-center justify-center py-24">
               <Loader2 className="animate-spin text-primary" size={32} />
@@ -694,7 +714,22 @@ export default function App() {
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedItem(null)}>
             <div className="bg-card border border-line rounded-xl w-full max-w-5xl max-h-[92vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-6 py-4 border-b border-line sticky top-0 bg-card z-10">
-                <h2 className="text-xs font-bold uppercase tracking-widest">Apuração Stack Audit™ — Lançamento #{selectedItem.id}</h2>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xs font-bold uppercase tracking-widest">Apuração Stack Audit™ — Lançamento #{selectedItem.id}</h2>
+                  {selectedItem.itemCode && (
+                    <button
+                      onClick={() => {
+                        const url = `${window.location.origin}/?item=${selectedItem.itemCode}`;
+                        navigator.clipboard.writeText(url);
+                      }}
+                      className="flex items-center gap-1.5 px-2 py-1 bg-sidebar border border-line hover:border-primary text-[10px] font-mono font-bold text-text-secondary hover:text-primary transition-all rounded"
+                      title="Copiar link direto deste lançamento"
+                    >
+                      <Link2 size={10} />
+                      {selectedItem.itemCode}
+                    </button>
+                  )}
+                </div>
                 <button onClick={() => setSelectedItem(null)} className="p-1 hover:text-primary transition-colors"><X size={16} /></button>
               </div>
               <div className="p-6 text-[11px] font-mono space-y-1">
@@ -1144,7 +1179,7 @@ export default function App() {
                 <table className="w-full text-left text-[11px] border-collapse">
                   <thead className="bg-sidebar text-text-secondary uppercase text-[10px] tracking-tighter">
                     <tr className="border-b border-line">
-                      {['#', 'Descrição', 'Atividade', 'Data', 'Razão Social', 'ID Doc Fiscal', 'CNPJ/CPF', 'Valor', 'Status', 'Pág NF', 'Pág PG', 'Observações'].map((h, i) => (
+                      {['#', 'Código', 'Descrição', 'Atividade', 'Data', 'Razão Social', 'ID Doc Fiscal', 'CNPJ/CPF', 'Valor', 'Status', 'Pág NF', 'Pág PG', 'Observações'].map((h, i) => (
                         <th key={i} className={cn('px-4 py-3 font-semibold border-r border-line', h === 'Valor' && 'text-right', ['Data', 'Status', 'Pág NF', 'Pág PG'].includes(h) && 'text-center')}>{h}</th>
                       ))}
                     </tr>
@@ -1153,6 +1188,17 @@ export default function App() {
                     {filteredItems.map((item, idx) => (
                       <tr key={idx} onClick={() => setSelectedItem(item)} className={cn('hover:bg-primary/5 transition-colors cursor-pointer', item.status === 'Ressalva' && 'bg-warning/5', item.status === 'Pendente' && 'bg-error/5')}>
                         <td className="px-4 py-2.5 text-text-secondary border-r border-line uppercase">{item.id || idx + 1}</td>
+                        <td className="px-2 py-2.5 border-r border-line/20" onClick={e => e.stopPropagation()}>
+                          {item.itemCode && (
+                            <button
+                              onClick={() => navigator.clipboard.writeText(`${window.location.origin}/?item=${item.itemCode}`)}
+                              className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-mono bg-sidebar border border-line hover:border-primary text-text-secondary hover:text-primary transition-all rounded"
+                              title="Copiar link deste lançamento"
+                            >
+                              <Link2 size={9} />{item.itemCode}
+                            </button>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5 text-text border-r border-line/20 font-sans uppercase">{item.description}</td>
                         <td className="px-4 py-2.5 text-text-secondary border-r border-line/20 font-sans uppercase">{item.activity}</td>
                         <td className="px-4 py-2.5 text-center whitespace-nowrap border-r border-line/20 uppercase">{item.date}</td>
@@ -1170,7 +1216,7 @@ export default function App() {
                     ))}
                     {filteredItems.length === 0 && (
                       <tr>
-                        <td colSpan={12} className="px-6 py-10 text-center text-text-secondary text-xs uppercase tracking-widest">
+                        <td colSpan={13} className="px-6 py-10 text-center text-text-secondary text-xs uppercase tracking-widest">
                           Nenhum lançamento encontrado
                         </td>
                       </tr>
@@ -1275,15 +1321,38 @@ export default function App() {
         {/* ── HISTÓRICO ──────────────────────────────────────────────────────── */}
         {activeSection === 'historico' && (
           <section className="px-10 py-8 animate-in fade-in slide-in-from-left-4 duration-500 overflow-y-auto pb-24">
-            <div className="flex items-end justify-between mb-8">
+            <div className="flex items-end justify-between mb-6">
               <div>
                 <h1 className="text-xl font-bold uppercase tracking-widest">Base de Dados de Auditorias</h1>
                 <p className="text-[11px] text-text-secondary font-mono mt-1">{history.length} auditoria{history.length !== 1 ? 's' : ''} armazenada{history.length !== 1 ? 's' : ''}</p>
               </div>
             </div>
 
+            {/* Stats bar */}
+            {history.length > 0 && (() => {
+              const totalValue = history.reduce((s, a) => s + (a.metrics?.totalValue ?? 0), 0);
+              const totalItems = history.reduce((s, a) => s + (a.metrics?.totalItems ?? 0), 0);
+              const totalConciliated = history.reduce((s, a) => s + (a.metrics?.conciliatedItems ?? 0), 0);
+              const avgRate = totalItems > 0 ? (totalConciliated / totalItems * 100).toFixed(0) : '—';
+              return (
+                <div className="grid grid-cols-4 gap-4 mb-6">
+                  {[
+                    { label: 'Valor Total Auditado', value: formatCurrency(totalValue) },
+                    { label: 'Total de Lançamentos', value: totalItems.toLocaleString('pt-BR') },
+                    { label: 'Taxa Média de Conciliação', value: `${avgRate}%` },
+                    { label: 'Auditorias Armazenadas', value: history.length },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-card border border-line rounded p-4">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-text-secondary mb-1">{label}</p>
+                      <p className="text-lg font-bold font-mono text-primary">{value}</p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
             <div className="border border-line rounded overflow-hidden">
-              <div className="grid grid-cols-[2fr_150px_110px_110px_120px_120px_80px] gap-3 px-6 py-2.5 bg-sidebar text-[10px] font-bold text-text-secondary uppercase tracking-widest border-b border-line">
+              <div className="grid grid-cols-[2fr_150px_100px_110px_130px_110px_80px] gap-3 px-6 py-2.5 bg-sidebar text-[10px] font-bold text-text-secondary uppercase tracking-widest border-b border-line">
                 <span>Organização / Responsável</span>
                 <span>Período Auditado</span>
                 <span>Contrato</span>
@@ -1302,17 +1371,24 @@ export default function App() {
                 const pct = total > 0 ? (conciliated / total) : 0;
                 const countColor = pct === 1 ? 'text-success' : pct >= 0.8 ? 'text-warning' : 'text-error';
                 return (
-                  <div key={item.id} className="grid grid-cols-[2fr_150px_110px_110px_120px_120px_80px] gap-3 items-center px-6 py-4 bg-card hover:bg-sidebar-active transition-all border-b border-line/30 group">
+                  <div key={item.id} className="grid grid-cols-[2fr_150px_100px_110px_130px_110px_80px] gap-3 items-center px-6 py-4 bg-card hover:bg-sidebar-active transition-all border-b border-line/30 group">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className={cn('w-2 h-2 rounded-full shrink-0 mt-1.5', item.verdict === 'APROVADO' ? 'bg-success' : item.verdict === 'DILIGÊNCIA' ? 'bg-error' : 'bg-warning')} />
                       <div className="min-w-0">
                         <h3 className="text-[13px] font-bold group-hover:text-primary transition-colors truncate">{item.organization}</h3>
                         {item.createdBy && (
                           <p className="text-[10px] text-text-secondary font-mono truncate mt-0.5">
-                            Gerado por: {item.createdBy}
+                            {item.createdBy}
                           </p>
                         )}
-                        <p className="text-[10px] text-primary font-mono font-bold mt-0.5">{formatCurrency(item.metrics?.totalValue ?? 0)}</p>
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                          <p className="text-[10px] text-primary font-mono font-bold">{formatCurrency(item.metrics?.totalValue ?? 0)}</p>
+                          {(item as any).sourceFiles && (
+                            <p className="text-[9px] text-text-secondary/60 font-mono truncate">
+                              {Object.values((item as any).sourceFiles).join(' · ')}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="text-[10px] font-mono text-text-secondary whitespace-nowrap">
@@ -1321,8 +1397,14 @@ export default function App() {
                     <div className="text-[11px] font-mono text-text-secondary">#{item.contractNumber}</div>
                     <div className="text-[11px] font-mono text-text-secondary whitespace-nowrap">{new Date(item.date).toLocaleDateString('pt-BR')}<br /><span className="text-[9px]">{new Date(item.date).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</span></div>
                     <div className={cn('text-[11px] font-mono font-bold', countColor)}>
-                      {conciliated}/{total}
+                      <span>{conciliated}/{total}</span>
                       <div className="text-[9px] font-normal text-text-secondary/70 mt-0.5">{(pct * 100).toFixed(0)}% conciliado</div>
+                      {((item.metrics as any)?.findingsCount ?? 0) > 0 && (
+                        <div className="text-[9px] text-warning font-normal mt-0.5">{(item.metrics as any).findingsCount} divergência{(item.metrics as any).findingsCount !== 1 ? 's' : ''}</div>
+                      )}
+                      {(total - conciliated - ((item.metrics as any)?.findingsCount ?? 0)) > 0 && (
+                        <div className="text-[9px] text-error font-normal">{total - conciliated} pendente{total - conciliated !== 1 ? 's' : ''}</div>
+                      )}
                     </div>
                     <div className={cn('text-[9px] font-bold uppercase tracking-widest', item.verdict === 'APROVADO' ? 'text-success' : item.verdict === 'DILIGÊNCIA' ? 'text-error' : 'text-warning')}>
                       {item.verdict}
