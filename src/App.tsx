@@ -658,29 +658,26 @@ export default function App() {
 
   // ── Reauditoria seletiva (#26) ────────────────────────────────────────────────
   const handleReauditSelectiva = async () => {
-    if (!lastAuditResult || !files.budget || !files.invoices || !files.payments) return;
+    if (!lastAuditResult) return;
     const targets = lastAuditResult.items.filter(i => i.status === 'Pendente' || i.status === 'Ressalva');
     if (targets.length === 0) return;
     setReauditLoading(true);
-    setReauditMessage('Iniciando reanálise...');
+    setReauditMessage('Reanalisando no servidor...');
     try {
-      const updated = await reprocessItems(
-        targets,
-        { organization: metadata.organization || lastAuditResult.organization, contractNumber: metadata.contractNumber || lastAuditResult.contractNumber },
-        files.budget.content as any[],
-        files.invoices.content as string,
-        files.payments.content as string,
-        '',
-        (_step, msg) => setReauditMessage(msg)
-      );
+      const r = await apiFetch(`/api/audits/${lastAuditResult.id}/reprocess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemIds: targets.map(i => i.id), additionalContext: '' }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { items: updated } = await r.json();
       const merged = lastAuditResult.items.map(i => {
-        const u = updated.find(u => u.id === i.id);
+        const u = (updated as AuditItem[]).find(u => u.id === i.id);
         return u ?? i;
       });
       const newResult = { ...lastAuditResult, items: merged };
       setLastAuditResult(newResult);
       setSelectedItem(null);
-      // Persist via PATCH
       await apiFetch(`/api/audits/${lastAuditResult.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -696,21 +693,19 @@ export default function App() {
 
   // ── Reanálise de item individual ──────────────────────────────────────────────
   const handleReanalyzeItem = async () => {
-    if (!selectedItem || !lastAuditResult || !files.budget || !files.invoices || !files.payments) return;
+    if (!selectedItem || !lastAuditResult) return;
     setReanalyzingItem(true);
     try {
-      const [updated] = await reprocessItems(
-        [selectedItem],
-        { organization: lastAuditResult.organization, contractNumber: lastAuditResult.contractNumber },
-        files.budget.content as any[],
-        files.invoices.content as string,
-        files.payments.content as string,
-        reanalyzeContext,
-        () => {}
-      );
+      const r = await apiFetch(`/api/audits/${lastAuditResult.id}/reprocess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemIds: [selectedItem.id], additionalContext: reanalyzeContext }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { items } = await r.json();
+      const updated = items[0] as AuditItem;
       const newItems = lastAuditResult.items.map(i => i.id === updated.id ? updated : i);
-      const newResult = { ...lastAuditResult, items: newItems };
-      setLastAuditResult(newResult);
+      setLastAuditResult({ ...lastAuditResult, items: newItems });
       setSelectedItem(updated);
       await apiFetch(`/api/audits/${lastAuditResult.id}`, {
         method: 'PATCH',
@@ -1466,7 +1461,7 @@ export default function App() {
                     <Download size={12} /> XLSX
                   </button>
                   {/* #26 — Reauditoria seletiva */}
-                  {diligencedItems.length > 0 && files.invoices && files.payments && files.budget && (
+                  {diligencedItems.length > 0 && (
                     <button
                       onClick={handleReauditSelectiva}
                       disabled={reauditLoading}
@@ -2266,27 +2261,23 @@ export default function App() {
                     <h3 className="text-[11px] font-bold uppercase tracking-widest mb-3 text-primary flex items-center gap-2">
                       <RefreshCw size={13} /> Reanálise Individual pela IA
                     </h3>
-                    {!files.invoices || !files.payments || !files.budget ? (
-                      <p className="text-[11px] text-text-secondary italic">Arquivos originais não disponíveis nesta sessão. Carregue uma nova auditoria para reanalisar.</p>
-                    ) : (
-                      <div className="space-y-3">
-                        <textarea
-                          value={reanalyzeContext}
-                          onChange={e => setReanalyzeContext(e.target.value)}
-                          placeholder="(Opcional) Contexto adicional para a IA: ex. 'A nota fiscal está na pág. 5 e o pagamento foi via PIX em 03/10/2025.'"
-                          rows={3}
-                          className="w-full bg-sidebar border border-line rounded px-3 py-2 text-[11px] font-sans text-text placeholder:text-text-secondary/40 focus:outline-none focus:border-primary transition-colors resize-none"
-                        />
-                        <button
-                          onClick={handleReanalyzeItem}
-                          disabled={reanalyzingItem}
-                          className="flex items-center gap-2 px-4 py-2 bg-primary/10 border border-primary/30 hover:bg-primary/20 text-primary text-[10px] font-bold uppercase tracking-widest transition-all disabled:opacity-50 rounded"
-                        >
-                          {reanalyzingItem ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                          {reanalyzingItem ? 'Reanalisando...' : 'Reanalisar este lançamento'}
-                        </button>
-                      </div>
-                    )}
+                    <div className="space-y-3">
+                      <textarea
+                        value={reanalyzeContext}
+                        onChange={e => setReanalyzeContext(e.target.value)}
+                        placeholder="(Opcional) Contexto adicional para a IA: ex. 'A nota fiscal está na pág. 5 e o pagamento foi via PIX em 03/10/2025.'"
+                        rows={3}
+                        className="w-full bg-sidebar border border-line rounded px-3 py-2 text-[11px] font-sans text-text placeholder:text-text-secondary/40 focus:outline-none focus:border-primary transition-colors resize-none"
+                      />
+                      <button
+                        onClick={handleReanalyzeItem}
+                        disabled={reanalyzingItem}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary/10 border border-primary/30 hover:bg-primary/20 text-primary text-[10px] font-bold uppercase tracking-widest transition-all disabled:opacity-50 rounded"
+                      >
+                        {reanalyzingItem ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        {reanalyzingItem ? 'Reanalisando...' : 'Reanalisar este lançamento'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Anotação do auditor */}

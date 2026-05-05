@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import session from "express-session";
 import passport from "passport";
+import crypto from "node:crypto";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import multer from "multer";
 import path from "path";
@@ -10,6 +11,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import FileStoreFactory from "session-file-store";
 import DocumentIntelligence, { getLongRunningPoller, isUnexpected } from "@azure-rest/ai-document-intelligence";
+import OpenAI from "openai";
+import { jsonrepair } from "jsonrepair";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -462,10 +465,243 @@ app.get("/api/audits/:id", requireAuth, (req, res) => {
   const resultPath = path.join(auditDir, "result.json");
   if (!fs.existsSync(resultPath)) return res.status(404).json({ error: "Auditoria não encontrada" });
   try {
-    res.json(JSON.parse(fs.readFileSync(resultPath, "utf-8")));
+    const audit = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+    // #20 — backfill itemCode for legacy audits that pre-date the feature
+    let dirty = false;
+    for (const item of (audit.items || [])) {
+      if (!item.itemCode) {
+        item.itemCode = crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
+        dirty = true;
+      }
+    }
+    if (dirty) fs.writeFileSync(resultPath, JSON.stringify(audit, null, 2));
+    res.json(audit);
   } catch {
     res.status(500).json({ error: "Erro ao ler auditoria" });
   }
+});
+
+app.patch("/api/audits/:id", requireAuth, (req: any, res) => {
+  const auditDir = path.join(AUDITS_DIR, req.params.id);
+  const resultPath = path.join(auditDir, "result.json");
+  if (!fs.existsSync(resultPath)) return res.status(404).json({ error: "Auditoria não encontrada" });
+
+  let existing: any;
+  try { existing = JSON.parse(fs.readFileSync(resultPath, "utf-8")); } catch { return res.status(500).json({ error: "Erro ao ler auditoria" }); }
+  if (existing.createdBy !== req.user?.email) return res.status(403).json({ error: "Proibido" });
+
+  const patch = req.body as any;
+  const updated = { ...existing, ...patch };
+
+  if (patch.items && Array.isArray(patch.items)) {
+    const itemsMap = new Map<number, any>(existing.items.map((i: any) => [i.id, i]));
+    for (const pi of patch.items) {
+      if (itemsMap.has(pi.id)) itemsMap.set(pi.id, { ...itemsMap.get(pi.id), ...pi });
+    }
+    const items = Array.from(itemsMap.values());
+    const conciliatedCount = items.filter((i: any) => i.status === "Conciliado").length;
+    const pendingCount = items.filter((i: any) => i.status === "Pendente").length;
+    const findingsCount = (updated.findings || []).length;
+    updated.items = items;
+    updated.metrics = { ...updated.metrics, totalItems: items.length, conciliatedItems: conciliatedCount, findingsCount };
+    if (pendingCount === 0 && findingsCount === 0) updated.verdict = "APROVADO";
+    else if (conciliatedCount / Math.max(items.length, 1) >= 0.8) updated.verdict = "APROVADO COM RESSALVAS";
+    else updated.verdict = "DILIGÊNCIA";
+  }
+
+  fs.writeFileSync(resultPath, JSON.stringify(updated, null, 2));
+  res.json(updated);
+});
+
+// ── API: server-side item reprocessing (calls DeepSeek from server) ──────────
+
+const aiClient = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY || "",
+  baseURL: "https://api.deepseek.com",
+});
+
+async function extractTextFromFile(filePath: string): Promise<string> {
+  if (!fs.existsSync(filePath)) return "";
+  const buffer = fs.readFileSync(filePath);
+
+  if (useAzure) {
+    try {
+      const result = await extractWithAzureDI(buffer);
+      return result.text;
+    } catch (e: any) {
+      console.warn("[Azure DI] reprocess fallback:", e.message);
+    }
+  }
+
+  const uid = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tmpIn = path.join("/tmp", `rpdf_${uid}.pdf`);
+  const tmpDir = path.join("/tmp", `rocr_${uid}`);
+  try {
+    fs.writeFileSync(tmpIn, buffer);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const { stdout: infoOut } = await execFileAsync("pdfinfo", [tmpIn]).catch(() => ({ stdout: "" }));
+    const totalPages = parseInt(infoOut.match(/Pages:\s+(\d+)/)?.[1] ?? "1", 10);
+    const { stdout: ptOut } = await execFileAsync("pdftotext", ["-layout", tmpIn, "-"]).catch(() => ({ stdout: "" }));
+    const rawPages = ptOut.split("\f").filter((_, i, a) => !(i === a.length - 1 && _.trim() === ""));
+    while (rawPages.length < totalPages) rawPages.push("");
+    const pageTexts: string[] = [];
+    for (let i = 0; i < rawPages.length; i++) {
+      const ptText = rawPages[i].trim();
+      if (ptText.replace(/\s/g, "").length >= OCR_THRESHOLD) { pageTexts.push(ptText); continue; }
+      try {
+        const imgBase = path.join(tmpDir, `p${i + 1}`);
+        await execFileAsync("pdftoppm", ["-f", String(i + 1), "-l", String(i + 1), "-r", "300", "-singlefile", "-png", tmpIn, imgBase]);
+        const { stdout: ocrOut } = await execFileAsync("tesseract", [`${imgBase}.png`, "stdout", "-l", "por"]);
+        pageTexts.push(ocrOut.trim());
+      } catch { pageTexts.push(ptText); }
+    }
+    return pageTexts.map((t, i) => `[Página ${i + 1}]\n${t}`).filter(p => p.replace(/\[Página \d+\]/, "").trim().length > 0).join("\n\n");
+  } finally {
+    fs.rmSync(tmpIn, { force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function parseJsonSafe(text: string): any {
+  const startIdx = text.indexOf("{");
+  if (startIdx === -1) return null;
+  let jsonText = text.substring(startIdx);
+  const endIdx = jsonText.lastIndexOf("}");
+  if (endIdx !== -1) jsonText = jsonText.substring(0, endIdx + 1);
+  try { return JSON.parse(jsonText); } catch { /* */ }
+  try { return JSON.parse(jsonrepair(jsonText)); } catch { /* */ }
+  return null;
+}
+
+const REPROCESS_BATCH = 25;
+
+app.post("/api/audits/:id/reprocess", requireAuth, async (req: any, res) => {
+  const auditDir = path.join(AUDITS_DIR, req.params.id);
+  const resultPath = path.join(auditDir, "result.json");
+  if (!fs.existsSync(resultPath)) return res.status(404).json({ error: "Auditoria não encontrada" });
+
+  let audit: any;
+  try { audit = JSON.parse(fs.readFileSync(resultPath, "utf-8")); } catch { return res.status(500).json({ error: "Erro ao ler auditoria" }); }
+  if (audit.createdBy !== req.user?.email) return res.status(403).json({ error: "Proibido" });
+
+  const { itemIds, additionalContext = "" } = req.body as { itemIds: number[]; additionalContext?: string };
+  if (!Array.isArray(itemIds) || itemIds.length === 0) return res.status(400).json({ error: "itemIds obrigatório" });
+
+  const items = (audit.items as any[]).filter((i: any) => itemIds.includes(i.id));
+  if (items.length === 0) return res.status(400).json({ error: "Nenhum item encontrado" });
+
+  const sf = audit.sourceFiles || {};
+  const invoicesPath = sf.invoices ? path.join(auditDir, sf.invoices) : "";
+  const paymentsPath = sf.payments ? path.join(auditDir, sf.payments) : "";
+  const budgetPath = sf.budget ? path.join(auditDir, sf.budget) : "";
+
+  let budgetCsv: any[] = [];
+  if (budgetPath && fs.existsSync(budgetPath)) {
+    const Papa = await import("papaparse");
+    const csvText = fs.readFileSync(budgetPath, "utf-8");
+    const parsed = Papa.default.parse(csvText, { header: true, skipEmptyLines: true });
+    budgetCsv = parsed.data as any[];
+  }
+
+  let pdfNfText = "";
+  let pdfPayText = "";
+  try {
+    [pdfNfText, pdfPayText] = await Promise.all([
+      extractTextFromFile(invoicesPath),
+      extractTextFromFile(paymentsPath),
+    ]);
+  } catch (e: any) {
+    console.error("[reprocess] PDF extraction error:", e.message);
+  }
+
+  const rows = items.map((i: any) => i.originalRow ?? {
+    Descrição: i.description, Atividade: i.activity, Data: i.date,
+    Fornecedor: i.entity, "Doc Fiscal": i.docId, "CNPJ/CPF": i.taxId, Valor: i.value,
+  });
+
+  const contextNote = additionalContext.trim() ? `\n\n### CONTEXTO ADICIONAL DO AUDITOR:\n${additionalContext.trim()}` : "";
+  const baseSystem = `Você é um Auditor Financeiro Sênior reprocessando itens específicos de uma prestação de contas.
+
+### REGRAS DE AUDITORIA:
+- Verificação Quádrupla: CSV Orçamento + CSV PC + PDF NF + PDF Comprovante.
+- Tarifas bancárias ≤ R$150: sempre "Conciliado", docId/nfPage/paymentPage = "Dispensado".
+- Mobilidade (Uber/99/Táxi): "Conciliado" se valores/data batem.
+- Documentos aceitos: NF-e, NFS-e, Nota de Débito, Recibo Uber/Táxi. Comprovante sem doc fiscal = "Pendente".
+- Status: apenas "Conciliado", "Ressalva" ou "Pendente".
+- activity: copie FIELMENTE do CSV de PC, sem interpretar.
+- entity: razão social completa conforme doc fiscal.
+- Linguagem: Português do Brasil, formal, financeira.${contextNote}
+
+### DADOS DO CONTRATO:
+- Organização: ${audit.organization}
+- Contrato: ${audit.contractNumber}
+
+### REFERÊNCIA ORÇAMENTÁRIA:
+${JSON.stringify(budgetCsv, null, 2)}`;
+
+  const updatedItems: any[] = [];
+  const batches: any[][] = [];
+  for (let i = 0; i < rows.length; i += REPROCESS_BATCH) batches.push(rows.slice(i, i + REPROCESS_BATCH));
+
+  for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+    const batch = batches[bIdx];
+    const offset = bIdx * REPROCESS_BATCH;
+    const systemMsg = `${baseSystem}\n\n### LOTE A REANALISAR (${batch.length} registros):\n${JSON.stringify(batch, null, 2)}`;
+    const userMsg = `Retorne JSON com "items" contendo EXATAMENTE ${batch.length} elementos.\n\n=== NOTAS FISCAIS ===\n${pdfNfText}\n\n=== COMPROVANTES ===\n${pdfPayText}\n\n{"items":[{"id":1,"description":"...","activity":"...","date":"...","entity":"...","docId":"...","taxId":"...","value":0,"status":"...","nfPage":"...","paymentPage":"...","observations":"..."}],"findings":[]}`;
+
+    let batchText = "";
+    try {
+      const resp = await aiClient.chat.completions.create({
+        model: "deepseek-chat",
+        messages: [{ role: "system", content: systemMsg }, { role: "user", content: userMsg }],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        max_tokens: 8192,
+      });
+      batchText = resp.choices[0]?.message?.content || "";
+    } catch (e: any) {
+      console.error(`[reprocess] batch ${bIdx + 1} DeepSeek error:`, e.message);
+      for (let j = 0; j < batch.length; j++) {
+        const orig = items[offset + j];
+        updatedItems.push({ ...orig, status: "Pendente", observations: `Falha na reanálise: ${e.message}` });
+      }
+      continue;
+    }
+
+    const parsed = parseJsonSafe(batchText);
+    let batchResult: any[] = parsed?.items ?? [];
+    while (batchResult.length < batch.length) batchResult.push(null);
+
+    for (let j = 0; j < batch.length; j++) {
+      const orig = items[offset + j];
+      const ai = batchResult[j];
+      if (!ai) { updatedItems.push({ ...orig, status: "Pendente", observations: "Item não retornado na reanálise." }); continue; }
+      updatedItems.push({
+        ...orig,
+        description: ai.description || orig.description,
+        activity: ai.activity || orig.activity,
+        date: ai.date || orig.date,
+        entity: ai.entity || orig.entity,
+        docId: ai.docId || orig.docId,
+        taxId: ai.taxId || orig.taxId,
+        value: typeof ai.value === "number" ? ai.value : orig.value,
+        status: ["Conciliado", "Ressalva", "Pendente"].includes(ai.status) ? ai.status : orig.status,
+        nfPage: ai.nfPage ?? orig.nfPage,
+        paymentPage: ai.paymentPage ?? orig.paymentPage,
+        observations: ai.observations || orig.observations,
+        emissionDateTime: ai.emissionDateTime ?? orig.emissionDateTime,
+        serviceDescription: ai.serviceDescription ?? orig.serviceDescription,
+        taxInfo: ai.taxInfo ?? orig.taxInfo,
+        paymentDateTime: ai.paymentDateTime ?? orig.paymentDateTime,
+        transactionId: ai.transactionId ?? orig.transactionId,
+        payerInfo: ai.payerInfo ?? orig.payerInfo,
+        payeeInfo: ai.payeeInfo ?? orig.payeeInfo,
+        paymentMethod: ai.paymentMethod ?? orig.paymentMethod,
+      });
+    }
+  }
+
+  res.json({ items: updatedItems });
 });
 
 app.delete("/api/audits/:id", requireAuth, (req, res) => {
@@ -557,6 +793,7 @@ app.get("/api/items/:code", requireAuth, (req, res) => {
 
 app.get("/api/share/:token", (req, res) => {
   const { token } = req.params;
+  const codeParam = String(req.query.code ?? '').trim().toUpperCase();
   if (!token || token.length < 10) return res.status(400).json({ error: "Token inválido" });
   if (!fs.existsSync(AUDITS_DIR)) return res.status(404).json({ error: "Auditoria não encontrada" });
 
@@ -569,10 +806,20 @@ app.get("/api/share/:token", (req, res) => {
     if (!fs.existsSync(resultPath)) continue;
     try {
       const result = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-      if (result.shareToken === token) {
-        const { createdBy: _c, sourceFiles: _s, shareToken: _t, ...safe } = result;
-        return res.json(safe);
+      if (result.shareToken !== token) continue;
+
+      // If this audit has an access code, validate it
+      if (result.shareAccessCode) {
+        if (!codeParam) {
+          return res.status(401).json({ error: "Código de acesso obrigatório", requiresCode: true });
+        }
+        if (codeParam !== result.shareAccessCode.toUpperCase()) {
+          return res.status(401).json({ error: "Código de acesso inválido", requiresCode: true });
+        }
       }
+
+      const { createdBy: _c, sourceFiles: _s, shareToken: _t, shareAccessCode: _a, ...safe } = result;
+      return res.json(safe);
     } catch { continue; }
   }
 
