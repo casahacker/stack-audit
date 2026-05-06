@@ -735,16 +735,18 @@ ${JSON.stringify(csv1, null, 2)}`;
     let batchItems: any[] = parsed?.items ?? [];
     const batchFindings: any[] = parsed?.findings ?? [];
 
-    batchItems = batchItems.map((item: any, j: number) => normalizeAuditItem(item, j, globalOffset));
+    // Capture AI's id BEFORE normalizeAuditItem overwrites it, use it to find
+    // the correct CSV row. AI ids run from batchStart to batchEnd.
+    batchItems = batchItems.map((item: any, j: number) => {
+      const aiId = typeof item.id === 'number' ? item.id : batchStart + j;
+      const csvIdx = Math.min(Math.max(aiId - batchStart, 0), batch.length - 1);
+      return { ...normalizeAuditItem(item, j, globalOffset), originalRow: batch[csvIdx] };
+    });
 
     if (batchItems.length < batch.length) {
       for (let j = batchItems.length; j < batch.length; j++) {
         batchItems.push(fallbackFromRow(batch[j], globalOffset + j));
       }
-    }
-
-    for (let j = 0; j < batchItems.length; j++) {
-      batchItems[j] = { ...batchItems[j], originalRow: batch[Math.min(j, batch.length - 1)] };
     }
 
     allItems.push(...batchItems);
@@ -1257,12 +1259,28 @@ app.get("/api/audits/:id/items/:itemId/doc", requireAuth, async (req: any, res) 
       return res.status(422).json({ error: "Página(s) não encontrada(s) no PDF" });
     }
 
-    let finalPdf: string;
+    let combinedPdf: string;
     if (pageFiles.length === 1) {
-      finalPdf = pageFiles[0];
+      combinedPdf = pageFiles[0];
     } else {
-      finalPdf = path.join(tmpDir, "output.pdf");
-      await execFileAsync("pdfunite", [...pageFiles, finalPdf]);
+      combinedPdf = path.join(tmpDir, "combined.pdf");
+      await execFileAsync("pdfunite", [...pageFiles, combinedPdf]);
+    }
+
+    // Compress with Ghostscript to reduce scanned-image PDFs from ~7MB → ~500KB
+    const finalPdf = path.join(tmpDir, "output.pdf");
+    try {
+      await execFileAsync("gs", [
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.4",
+        "-dPDFSETTINGS=/ebook",   // 150 DPI — legible for fiscal docs
+        "-dNOPAUSE", "-dQUIET", "-dBATCH",
+        `-sOutputFile=${finalPdf}`,
+        combinedPdf,
+      ]);
+    } catch {
+      // gs not available or failed — serve uncompressed
+      fs.copyFileSync(combinedPdf, finalPdf);
     }
 
     const pdfBuffer = fs.readFileSync(finalPdf);

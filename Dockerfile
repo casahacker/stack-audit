@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM node:22-alpine
 WORKDIR /app
-RUN apk add --no-cache poppler-utils tesseract-ocr tesseract-ocr-data-por
+RUN apk add --no-cache poppler-utils tesseract-ocr tesseract-ocr-data-por ghostscript
 COPY package.json ./
 RUN npm install
 COPY --from=builder /app/dist ./dist

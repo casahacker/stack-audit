@@ -1070,39 +1070,60 @@ table.rapc tr.row-pend td { background: #fff1f2; }
     const statusColor = item.status === 'Conciliado' ? '#24a148' : item.status === 'Ressalva' ? '#f1c21b' : '#da1e28';
     const row = (label: string, value: string | number | undefined) =>
       value && value !== 'N/A' ? `<tr><td class="label">${label}</td><td class="value">${value}</td></tr>` : '';
+    // Casa Hacker logo — SVG inline so it works in the print popup (no CORS/path issues)
+    const logoSvg = `<svg width="120" height="32" viewBox="0 0 120 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="4" fill="#0f62fe"/>
+      <text x="6" y="22" font-family="monospace" font-size="18" font-weight="800" fill="#fff">CH</text>
+      <text x="40" y="14" font-family="'IBM Plex Mono',monospace" font-size="9" font-weight="700" fill="#0f62fe" text-anchor="start" letter-spacing="1">CASA HACKER</text>
+      <text x="40" y="26" font-family="'IBM Plex Mono',monospace" font-size="7" fill="#525252" text-anchor="start" letter-spacing="0.5">Stack Audit™</text>
+    </svg>`;
+    const originalRowHtml = item.originalRow
+      ? Object.entries(item.originalRow).map(([k, v]) => row(k, String(v ?? ''))).join('')
+      : row('Dados originais', 'Não disponível');
     const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
 <title>Lançamento #${item.id} — ${audit.organization}</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:'IBM Plex Mono',Consolas,monospace;font-size:11px;color:#161616;background:#fff;padding:32px}
-  header{border-bottom:2px solid #0f62fe;padding-bottom:12px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:flex-end}
-  header h1{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#0f62fe}
-  header .meta{text-align:right;font-size:9px;color:#525252;line-height:1.6}
-  .badge{display:inline-block;padding:2px 8px;border:1px solid ${statusColor};color:${statusColor};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-radius:2px;margin-bottom:16px}
-  .section{margin-bottom:20px}
-  .section h2{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#0f62fe;border-bottom:1px solid #e0e0e0;padding-bottom:6px;margin-bottom:10px}
+  body{font-family:'IBM Plex Mono',Consolas,monospace;font-size:11px;color:#161616;background:#fff;padding:28px 32px}
+  header{border-bottom:2px solid #0f62fe;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center}
+  header .title{display:flex;flex-direction:column;gap:4px}
+  header h1{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#0f62fe}
+  header .subtitle{font-size:9px;color:#525252}
+  header .meta{text-align:right;font-size:9px;color:#525252;line-height:1.7}
+  .badge{display:inline-block;padding:3px 10px;border:1px solid ${statusColor};color:${statusColor};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-radius:2px;margin-bottom:14px}
+  .section{margin-bottom:18px}
+  .section h2{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.15em;color:#0f62fe;border-bottom:1px solid #e0e0e0;padding-bottom:5px;margin-bottom:8px}
   table{width:100%;border-collapse:collapse}
-  td{padding:5px 0;border-bottom:1px solid #f4f4f4;vertical-align:top}
-  .label{width:180px;color:#525252;text-transform:uppercase;font-size:10px}
-  .value{font-weight:600;text-transform:uppercase;font-size:10px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-  .obs{background:#f4f4f4;padding:12px;font-size:11px;color:#393939;line-height:1.5;text-transform:uppercase;min-height:60px}
-  footer{margin-top:32px;border-top:1px solid #e0e0e0;padding-top:12px;font-size:9px;color:#8d8d8d;text-align:center;text-transform:uppercase;letter-spacing:.08em}
-  @media print{body{padding:16px}footer{position:fixed;bottom:0;left:0;right:0}}
+  td{padding:4px 0;border-bottom:1px solid #f4f4f4;vertical-align:top}
+  .label{width:160px;color:#525252;text-transform:uppercase;font-size:9px;padding-right:8px}
+  .value{font-weight:600;text-transform:uppercase;font-size:9px;word-break:break-word}
+  .grid{display:table;width:100%;table-layout:fixed}
+  .col{display:table-cell;width:50%;vertical-align:top;padding-right:20px}
+  .col:last-child{padding-right:0;padding-left:20px;border-left:1px solid #e0e0e0}
+  .obs{background:#f4f4f4;padding:10px;font-size:10px;color:#393939;line-height:1.5;text-transform:uppercase;min-height:50px}
+  footer{margin-top:28px;border-top:1px solid #e0e0e0;padding-top:10px;font-size:8px;color:#8d8d8d;text-align:center;text-transform:uppercase;letter-spacing:.08em}
+  @media print{
+    @page{margin:16mm}
+    body{padding:0}
+    footer{position:fixed;bottom:0;left:0;right:0;background:#fff}
+  }
 </style></head><body>
 <header>
-  <div>
-    <h1>Stack Audit™ — Detalhes do Lançamento</h1>
-    <p style="font-size:10px;color:#525252;margin-top:4px">${audit.organization} &bull; Contrato ${audit.contractNumber} &bull; ${audit.periodStart} → ${audit.periodEnd}</p>
+  <div style="display:flex;align-items:center;gap:16px">
+    ${logoSvg}
+    <div class="title">
+      <h1>Detalhes do Lançamento</h1>
+      <span class="subtitle">${audit.organization} &bull; Contrato ${audit.contractNumber} &bull; ${audit.periodStart} → ${audit.periodEnd}</span>
+    </div>
   </div>
   <div class="meta">
     Gerado em ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'})}<br>
-    Lançamento #${item.id}${item.itemCode ? ` &bull; ${item.itemCode}` : ''}
+    Lançamento #${item.id}${item.itemCode ? ` &bull; Cód. ${item.itemCode}` : ''}
   </div>
 </header>
 <div><span class="badge">${item.status}</span></div>
 <div class="grid">
-  <div class="section">
+  <div class="col section">
     <h2>Apuração Stack Audit™</h2>
     <table>
       ${row('Descrição', item.description)}
@@ -1121,14 +1142,12 @@ table.rapc tr.row-pend td { background: #fff1f2; }
       ${item.payeeInfo ? row('Recebedor', item.payeeInfo) : ''}
     </table>
   </div>
-  <div class="section">
+  <div class="col section">
     <h2>Lançamento — Planilha de Prestação</h2>
-    <table>
-      ${(item.rawRows ?? []).flatMap((r: any) => Object.entries(r).map(([k, v]) => row(k, String(v ?? '')))).join('')}
-    </table>
+    <table>${originalRowHtml}</table>
   </div>
 </div>
-<div class="section" style="margin-top:8px">
+<div class="section">
   <h2>Observações Stack Audit™</h2>
   <div class="obs">${item.observations || (item.status === 'Conciliado' ? 'Lançamento conciliado com documentos fiscais e comprovantes de pagamento sem divergências.' : 'Nenhuma observação registrada.')}</div>
 </div>
