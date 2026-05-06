@@ -339,8 +339,7 @@ export default function App() {
   // ── UX-07: Accessibility bar state ───────────────────────────────────────────
   type A11yTheme = 'light' | 'dark';
   type A11yFontSize = 'small' | 'normal' | 'large';
-  const [a11yPanelOpen, setA11yPanelOpen] = useState(false);
-  const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
+const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
     const saved = localStorage.getItem('a11y-theme') as A11yTheme | null;
     if (saved) return saved;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -1407,17 +1406,73 @@ table.rapc tr.row-pend td { background: #fff1f2; }
   });
 
   return (
-    <div className="flex min-h-screen">
+    <>
+    {/* ── UX-07: Accessibility bar — fixed top strip ───────────────────────── */}
+    <div
+      role="navigation"
+      aria-label="Barra de acessibilidade"
+      className="fixed top-0 left-0 right-0 h-8 z-[110] flex items-center px-4 gap-4 bg-[#21272a] text-white border-b border-white/10 text-[11px] select-none"
+    >
+      <span className="flex items-center gap-1.5 font-bold uppercase tracking-widest text-white/60 shrink-0">
+        <Accessibility size={12} />
+        Acessibilidade
+      </span>
+      <span className="w-px h-4 bg-white/20 shrink-0" />
+      {/* Theme */}
+      <span className="text-white/40 uppercase tracking-wider shrink-0">Tema</span>
+      <button
+        onClick={() => { setA11yHighContrast(false); setA11yTheme('light'); }}
+        className={cn('flex items-center gap-1 px-2 py-0.5 rounded transition-all', !a11yHighContrast && a11yTheme === 'light' ? 'bg-primary text-white' : 'text-white/60 hover:text-white hover:bg-white/10')}
+        aria-pressed={!a11yHighContrast && a11yTheme === 'light'}
+        aria-label="Tema claro"
+      >
+        <Sun size={11} /> Claro
+      </button>
+      <button
+        onClick={() => { setA11yHighContrast(false); setA11yTheme('dark'); }}
+        className={cn('flex items-center gap-1 px-2 py-0.5 rounded transition-all', !a11yHighContrast && a11yTheme === 'dark' ? 'bg-primary text-white' : 'text-white/60 hover:text-white hover:bg-white/10')}
+        aria-pressed={!a11yHighContrast && a11yTheme === 'dark'}
+        aria-label="Tema escuro"
+      >
+        <Moon size={11} /> Escuro
+      </button>
+      <span className="w-px h-4 bg-white/20 shrink-0" />
+      {/* High contrast */}
+      <button
+        onClick={() => setA11yHighContrast(p => !p)}
+        className={cn('flex items-center gap-1 px-2 py-0.5 rounded transition-all', a11yHighContrast ? 'bg-primary text-white' : 'text-white/60 hover:text-white hover:bg-white/10')}
+        aria-pressed={a11yHighContrast}
+        aria-label="Alto contraste WCAG AA"
+      >
+        <Contrast size={11} /> Alto Contraste
+      </button>
+      <span className="w-px h-4 bg-white/20 shrink-0" />
+      {/* Font size */}
+      <span className="text-white/40 uppercase tracking-wider shrink-0">Fonte</span>
+      {([['small', 'A−'], ['normal', 'A'], ['large', 'A+']] as const).map(([size, label]) => (
+        <button
+          key={size}
+          onClick={() => setA11yFontSize(size)}
+          className={cn('px-2 py-0.5 rounded font-bold transition-all', a11yFontSize === size ? 'bg-primary text-white' : 'text-white/60 hover:text-white hover:bg-white/10', size === 'small' ? 'text-[10px]' : size === 'large' ? 'text-[13px]' : 'text-[11px]')}
+          aria-pressed={a11yFontSize === size}
+          aria-label={`Fonte ${size === 'small' ? 'pequena' : size === 'normal' ? 'normal' : 'grande'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+
+    <div className="flex min-h-screen pt-8">
       {/* UX-02: Skip to main content link */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-primary focus:text-white focus:px-4 focus:py-2 focus:rounded focus:text-xs focus:font-bold focus:uppercase focus:tracking-widest focus:outline-none"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-10 focus:left-2 focus:z-[200] focus:bg-primary focus:text-white focus:px-4 focus:py-2 focus:rounded focus:text-xs focus:font-bold focus:uppercase focus:tracking-widest focus:outline-none"
       >
         Ir para conteúdo principal
       </a>
 
       {/* Sidebar */}
-      <aside className="fixed left-0 top-0 h-full w-[180px] bg-sidebar border-r border-line flex flex-col z-50">
+      <aside className="fixed left-0 top-8 h-[calc(100vh-2rem)] w-[180px] bg-sidebar border-r border-line flex flex-col z-50">
         <div className="pt-6 pb-8 px-5 flex flex-col gap-4">
           <img src="https://casahacker.org/wp-content/uploads/2023/07/logo_vertical-branco.svg" alt="Casa Hacker" className="h-10 w-auto object-contain object-left invert opacity-90" />
           <div className="text-primary font-extrabold text-[11px] tracking-widest uppercase">Stack Audit</div>
@@ -2723,75 +2778,8 @@ table.rapc tr.row-pend td { background: #fff1f2; }
         ))}
       </div>
 
-      {/* ── UX-07: Accessibility bar ───────────────────────────────────────── */}
-      <div className="fixed bottom-[52px] left-2 z-[60]">
-        <button
-          onClick={() => setA11yPanelOpen(p => !p)}
-          aria-label="Opções de acessibilidade"
-          aria-expanded={a11yPanelOpen}
-          title="Acessibilidade"
-          className="w-9 h-9 rounded-full bg-sidebar border border-line flex items-center justify-center text-text-secondary hover:text-primary hover:border-primary transition-all shadow-sm"
-        >
-          <Accessibility size={16} />
-        </button>
-        {a11yPanelOpen && (
-          <div className="absolute bottom-11 left-0 bg-card border border-line rounded-lg shadow-lg p-4 w-56 animate-in fade-in zoom-in-95 duration-150">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-text-secondary mb-3">Acessibilidade</p>
-
-            {/* Theme toggle */}
-            <div className="mb-3">
-              <p className="text-[10px] text-text-secondary mb-1.5 uppercase tracking-wider">Tema</p>
-              <div className="flex gap-1.5">
-                <button
-                  onClick={() => { setA11yHighContrast(false); setA11yTheme('light'); }}
-                  className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] border transition-all flex-1 justify-center', !a11yHighContrast && a11yTheme === 'light' ? 'bg-primary text-white border-primary' : 'border-line text-text-secondary hover:border-primary')}
-                  aria-pressed={!a11yHighContrast && a11yTheme === 'light'}
-                >
-                  <Sun size={12} /> Claro
-                </button>
-                <button
-                  onClick={() => { setA11yHighContrast(false); setA11yTheme('dark'); }}
-                  className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] border transition-all flex-1 justify-center', !a11yHighContrast && a11yTheme === 'dark' ? 'bg-primary text-white border-primary' : 'border-line text-text-secondary hover:border-primary')}
-                  aria-pressed={!a11yHighContrast && a11yTheme === 'dark'}
-                >
-                  <Moon size={12} /> Escuro
-                </button>
-              </div>
-            </div>
-
-            {/* High contrast */}
-            <div className="mb-3">
-              <button
-                onClick={() => setA11yHighContrast(p => !p)}
-                className={cn('w-full flex items-center gap-2 px-3 py-1.5 rounded text-[11px] border transition-all', a11yHighContrast ? 'bg-primary text-white border-primary' : 'border-line text-text-secondary hover:border-primary')}
-                aria-pressed={a11yHighContrast}
-              >
-                <Contrast size={12} />
-                Alto Contraste (WCAG AA)
-              </button>
-            </div>
-
-            {/* Font size */}
-            <div>
-              <p className="text-[10px] text-text-secondary mb-1.5 uppercase tracking-wider">Tamanho da Fonte</p>
-              <div className="flex gap-1">
-                {([['small', 'A−', 'text-[10px]'], ['normal', 'A', 'text-[12px]'], ['large', 'A+', 'text-[14px]']] as const).map(([size, label, cls]) => (
-                  <button
-                    key={size}
-                    onClick={() => setA11yFontSize(size)}
-                    className={cn('flex-1 py-1.5 rounded border transition-all font-bold', cls, a11yFontSize === size ? 'bg-primary text-white border-primary' : 'border-line text-text-secondary hover:border-primary')}
-                    aria-pressed={a11yFontSize === size}
-                    aria-label={`Fonte ${size === 'small' ? 'pequena' : size === 'normal' ? 'normal' : 'grande'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
+    </>
   );
 }
 
