@@ -31,6 +31,8 @@ import {
   Sun,
   Moon,
   Contrast,
+  Printer,
+  Share2,
 } from 'lucide-react';
 import { cn, formatCurrency, truncateFileName } from './lib/utils';
 import Papa from 'papaparse';
@@ -465,6 +467,27 @@ const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
             setSelectedItem(data.item);
             setActiveSection('resultado');
           });
+      })
+      .catch(() => {});
+  }, [user, apiFetch, loadAuditFiles]);
+
+  // ── Internal deep link: ?audit=UUID&item=NUM (#44) ──────────────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const auditParam = params.get('audit');
+    const itemParam = params.get('item');
+    if (!auditParam || !itemParam || !user) return;
+    // Clear params from URL without reload
+    const clean = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, '', clean);
+    apiFetch(`/api/audits/${auditParam}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(audit => {
+        if (!audit) return;
+        setLastAuditResult(audit);
+        if (audit.sourceFiles) loadAuditFiles(audit.id, audit.sourceFiles);
+        const item = audit.items?.find((it: AuditItem) => String(it.id) === String(itemParam));
+        if (item) { setSelectedItem(item); setActiveSection('resultado'); }
       })
       .catch(() => {});
   }, [user, apiFetch, loadAuditFiles]);
@@ -1037,6 +1060,84 @@ table.rapc tr.row-pend td { background: #fff1f2; }
     } finally {
       setReauditLoading(false);
     }
+  };
+
+  // ── Imprimir / exportar lançamento (#45) ────────────────────────────────────
+  const handlePrintItem = () => {
+    if (!selectedItem || !lastAuditResult) return;
+    const item = selectedItem;
+    const audit = lastAuditResult;
+    const statusColor = item.status === 'Conciliado' ? '#24a148' : item.status === 'Ressalva' ? '#f1c21b' : '#da1e28';
+    const row = (label: string, value: string | number | undefined) =>
+      value && value !== 'N/A' ? `<tr><td class="label">${label}</td><td class="value">${value}</td></tr>` : '';
+    const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>Lançamento #${item.id} — ${audit.organization}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'IBM Plex Mono',Consolas,monospace;font-size:11px;color:#161616;background:#fff;padding:32px}
+  header{border-bottom:2px solid #0f62fe;padding-bottom:12px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:flex-end}
+  header h1{font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#0f62fe}
+  header .meta{text-align:right;font-size:9px;color:#525252;line-height:1.6}
+  .badge{display:inline-block;padding:2px 8px;border:1px solid ${statusColor};color:${statusColor};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-radius:2px;margin-bottom:16px}
+  .section{margin-bottom:20px}
+  .section h2{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#0f62fe;border-bottom:1px solid #e0e0e0;padding-bottom:6px;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:5px 0;border-bottom:1px solid #f4f4f4;vertical-align:top}
+  .label{width:180px;color:#525252;text-transform:uppercase;font-size:10px}
+  .value{font-weight:600;text-transform:uppercase;font-size:10px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .obs{background:#f4f4f4;padding:12px;font-size:11px;color:#393939;line-height:1.5;text-transform:uppercase;min-height:60px}
+  footer{margin-top:32px;border-top:1px solid #e0e0e0;padding-top:12px;font-size:9px;color:#8d8d8d;text-align:center;text-transform:uppercase;letter-spacing:.08em}
+  @media print{body{padding:16px}footer{position:fixed;bottom:0;left:0;right:0}}
+</style></head><body>
+<header>
+  <div>
+    <h1>Stack Audit™ — Detalhes do Lançamento</h1>
+    <p style="font-size:10px;color:#525252;margin-top:4px">${audit.organization} &bull; Contrato ${audit.contractNumber} &bull; ${audit.periodStart} → ${audit.periodEnd}</p>
+  </div>
+  <div class="meta">
+    Gerado em ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'})}<br>
+    Lançamento #${item.id}${item.itemCode ? ` &bull; ${item.itemCode}` : ''}
+  </div>
+</header>
+<div><span class="badge">${item.status}</span></div>
+<div class="grid">
+  <div class="section">
+    <h2>Apuração Stack Audit™</h2>
+    <table>
+      ${row('Descrição', item.description)}
+      ${row('Atividade / Rubrica', item.activity)}
+      ${row('Data', item.date)}
+      ${row('Fornecedor', item.entity)}
+      ${row('CNPJ / CPF', item.taxId)}
+      ${row('Doc Fiscal (ID)', item.docId)}
+      ${row('Valor', formatCurrency(item.value))}
+      ${row('Pág. Nota Fiscal', item.nfPage)}
+      ${row('Pág. Comprovante', item.paymentPage)}
+      ${item.emissionDateTime ? row('Data/Hora Emissão', item.emissionDateTime) : ''}
+      ${item.transactionId ? row('ID Transação', item.transactionId) : ''}
+      ${item.paymentMethod ? row('Meio de Pagamento', item.paymentMethod) : ''}
+      ${item.payerInfo ? row('Pagador', item.payerInfo) : ''}
+      ${item.payeeInfo ? row('Recebedor', item.payeeInfo) : ''}
+    </table>
+  </div>
+  <div class="section">
+    <h2>Lançamento — Planilha de Prestação</h2>
+    <table>
+      ${(item.rawRows ?? []).flatMap((r: any) => Object.entries(r).map(([k, v]) => row(k, String(v ?? '')))).join('')}
+    </table>
+  </div>
+</div>
+<div class="section" style="margin-top:8px">
+  <h2>Observações Stack Audit™</h2>
+  <div class="obs">${item.observations || (item.status === 'Conciliado' ? 'Lançamento conciliado com documentos fiscais e comprovantes de pagamento sem divergências.' : 'Nenhuma observação registrada.')}</div>
+</div>
+${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div class="obs" style="border-left:3px solid #0f62fe">${item.auditorNote}</div></div>` : ''}
+<footer>CONFIDENCIAL — USO INTERNO &nbsp;&bull;&nbsp; Stack Audit™ — Associação Casa Hacker &nbsp;&bull;&nbsp; CNPJ 36.038.079/0001-97</footer>
+<script>window.onload=()=>{window.print();}</script>
+</body></html>`;
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (win) { win.document.write(html); win.document.close(); }
   };
 
   // ── Reanálise de item individual ──────────────────────────────────────────────
@@ -2699,9 +2800,36 @@ table.rapc tr.row-pend td { background: #fff1f2; }
                   {selectedItem.status}
                 </div>
               </div>
-              <button onClick={() => setSelectedItem(null)} className="text-text-secondary hover:text-text transition-colors p-1.5 hover:bg-white/5 rounded" aria-label="Fechar">
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Share internal link (#44) */}
+                {lastAuditResult?.id && (
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/?audit=${lastAuditResult.id}&item=${selectedItem.id}`;
+                      navigator.clipboard.writeText(url).then(() =>
+                        addToast('success', 'Link copiado — apenas usuários autenticados podem acessar')
+                      );
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-sidebar border border-line hover:border-primary text-[10px] font-bold uppercase tracking-widest text-text-secondary hover:text-primary transition-all rounded"
+                    title="Copiar link interno deste lançamento (requer autenticação)"
+                  >
+                    <Share2 size={12} /> Compartilhar
+                  </button>
+                )}
+                {/* Print (#45) */}
+                {lastAuditResult && (
+                  <button
+                    onClick={handlePrintItem}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-sidebar border border-line hover:border-primary text-[10px] font-bold uppercase tracking-widest text-text-secondary hover:text-primary transition-all rounded"
+                    title="Imprimir / exportar este lançamento como PDF"
+                  >
+                    <Printer size={12} /> Imprimir
+                  </button>
+                )}
+                <button onClick={() => setSelectedItem(null)} className="text-text-secondary hover:text-text transition-colors p-1.5 hover:bg-white/5 rounded" aria-label="Fechar">
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
               {/* Modal scrollable body */}

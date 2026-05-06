@@ -679,7 +679,14 @@ app.post("/api/audit-run", requireAuth, async (req: any, res) => {
 - **Mobilidade (Uber/99/Táxi)**: Recibos de aplicativos de transporte (Uber, Táxi, 99) são considerados Comprovantes Aprovados válidos por si mesmos, sem necessidade de outro documento fiscal. Devem ser classificados como "Conciliado" se os valores/data baterem com o lançamento.
 - **Documentos Fiscais Aceitos**: São documentos fiscais válidos: NF-e, NFS-e, Nota de Débito, Recibo Uber/Táxi/99 e Recibo de Aluguel. NÃO são documentos fiscais suficientes: comprovantes de pagamento (PIX, TED, DOC, boleto, extrato). Se o único documento for comprovante sem doc fiscal: status 'Pendente'.
 - **Identificação**: Status pode ser apenas: 'Conciliado', 'Ressalva' ou 'Pendente'.
-- **Rastreabilidade de Páginas**: Identifique em qual página do doc fiscal/comprovante está a comprovação. Se não achar: "Não localizado".
+- **Rastreabilidade de Páginas — REGRA CRÍTICA**:
+  O texto do PDF chega com marcadores "[Página N]" separando cada página.
+  Para cada lançamento, busque a transação correspondente pelo VALOR EXATO e pela DATA (aproximada ±3 dias) no texto do comprovante.
+  Comprovantes de pagamento são frequentemente extratos bancários com múltiplas transações por página — procure o valor e a data em cada página.
+  Termos a buscar: PIX, TED, DOC, transferência, pagamento, beneficiário, nome/razão social do fornecedor, CNPJ/CPF.
+  Se encontrar correspondência por valor + data em alguma página: informe "paymentPage" com esse número de página.
+  Somente use "Não localizado" se o valor E a data do lançamento realmente não aparecerem em nenhuma página do comprovante.
+  Se encontrar o valor mas a página exata for ambígua, informe a página mais provável.
 - **Razão Social (entity)**: Utilize SEMPRE a razão social completa conforme consta no documento fiscal.
 - **Atividade / Rubrica (activity)**: Copie FIELMENTE o valor exato da coluna de atividade/rubrica conforme registrado no CSV de prestação de contas.
 - **Linguagem**: Português do Brasil, terminologia formal e financeira.
@@ -861,6 +868,7 @@ app.post("/api/audits/:id/reprocess", requireAuth, async (req: any, res) => {
 - Status: apenas "Conciliado", "Ressalva" ou "Pendente".
 - activity: copie FIELMENTE do CSV de PC, sem interpretar.
 - entity: razão social completa conforme doc fiscal.
+- Rastreabilidade de Páginas: O texto chega com marcadores "[Página N]". Para cada item, busque o VALOR EXATO e DATA (±3 dias) no texto do comprovante. Comprovantes são frequentemente extratos bancários com múltiplas transações por página. Somente use "Não localizado" se valor E data realmente não aparecerem em nenhuma página.
 - Linguagem: Português do Brasil, formal, financeira.${contextNote}
 
 ### DADOS DO CONTRATO:
@@ -1019,6 +1027,111 @@ app.get("/api/audits/:id/files/:filename", requireAuth, (req: any, res) => {
 });
 
 // ── API: item deep link by itemCode (requires auth) ──────────────────────────
+
+// ── API: global search across all audits ──────────────────────────────────────
+
+app.get("/api/search", requireAuth, (req: any, res) => {
+  const raw = String(req.query.q ?? "").trim();
+  const limit = Math.min(parseInt(String(req.query.limit ?? "100"), 10) || 100, 200);
+  if (!raw || raw.length < 2) return res.status(400).json({ error: "Query muito curta (mínimo 2 caracteres)" });
+  if (!fs.existsSync(AUDITS_DIR)) return res.json({ results: [], total: 0, query: raw, detectedType: "fulltext" });
+
+  // ── Auto-detect search type ────────────────────────────────────────────────
+  const digitsOnly = raw.replace(/\D/g, "");
+  let detectedType: string;
+  if (/^[A-F0-9]{8}$/i.test(raw.trim())) {
+    detectedType = "itemCode";
+  } else if (digitsOnly.length === 14 || digitsOnly.length === 11) {
+    detectedType = "taxId";
+  } else {
+    detectedType = "fulltext";
+  }
+
+  const norm = (s: string) =>
+    String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  const qNorm = norm(raw);
+  const qDigits = raw.replace(/\D/g, "");
+
+  const dirs = fs.readdirSync(AUDITS_DIR).filter(d =>
+    fs.statSync(path.join(AUDITS_DIR, d)).isDirectory()
+  );
+
+  interface SearchResult {
+    auditId: string;
+    organization: string;
+    contractNumber: string;
+    periodStart: string;
+    periodEnd: string;
+    verdict: string;
+    createdBy: string;
+    matchType: string;
+    matchField: string;
+    item: any;
+  }
+
+  const results: SearchResult[] = [];
+
+  for (const dir of dirs) {
+    if (results.length >= limit) break;
+    const resultPath = path.join(AUDITS_DIR, dir, "result.json");
+    if (!fs.existsSync(resultPath)) continue;
+    let audit: any;
+    try { audit = JSON.parse(fs.readFileSync(resultPath, "utf-8")); } catch { continue; }
+
+    const auditCtx = {
+      auditId: audit.id,
+      organization: audit.organization,
+      contractNumber: audit.contractNumber,
+      periodStart: audit.periodStart,
+      periodEnd: audit.periodEnd,
+      verdict: audit.verdict,
+      createdBy: audit.createdBy || "",
+    };
+
+    for (const item of audit.items ?? []) {
+      if (results.length >= limit) break;
+
+      let matched = false;
+      let matchType = detectedType;
+      let matchField = "";
+
+      if (detectedType === "itemCode") {
+        if (norm(item.itemCode) === norm(raw)) { matched = true; matchField = "itemCode"; }
+      } else if (detectedType === "taxId") {
+        const itemDigits = String(item.taxId ?? "").replace(/\D/g, "");
+        if (itemDigits === qDigits) { matched = true; matchField = "taxId"; }
+      } else {
+        // Full-text: check each field individually to report matchField
+        const checks: [string, string][] = [
+          ["entity",       item.entity],
+          ["docId",        item.docId],
+          ["description",  item.description],
+          ["activity",     item.activity],
+          ["observations", item.observations],
+          ["taxId",        item.taxId],
+          ["itemCode",     item.itemCode],
+        ];
+        for (const [field, val] of checks) {
+          if (norm(String(val ?? "")).includes(qNorm)) {
+            matched = true; matchField = field;
+            // Refine detectedType label for display
+            if (field === "entity" || field === "taxId") matchType = "supplier";
+            else if (field === "docId") matchType = "docId";
+            else if (field === "itemCode") matchType = "itemCode";
+            else matchType = "fulltext";
+            break;
+          }
+        }
+      }
+
+      if (matched) {
+        results.push({ ...auditCtx, matchType, matchField, item });
+      }
+    }
+  }
+
+  res.json({ results, total: results.length, query: raw, detectedType });
+});
 
 app.get("/api/items/:code", requireAuth, (req, res) => {
   const { code } = req.params;
