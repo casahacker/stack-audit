@@ -39,6 +39,7 @@ export interface AuditItem {
   observations: string;
   originalRow?: Record<string, any>;
   auditorNote?: string;
+  needsReview?: boolean;
   emissionDateTime?: string;
   serviceDescription?: string;
   taxInfo?: string;

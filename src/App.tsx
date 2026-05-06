@@ -33,6 +33,12 @@ import {
   Contrast,
   Printer,
   Share2,
+  Flag,
+  ChevronUp,
+  ChevronDown,
+  Layers,
+  Keyboard,
+  Clock,
 } from 'lucide-react';
 import { cn, formatCurrency, truncateFileName } from './lib/utils';
 import Papa from 'papaparse';
@@ -393,6 +399,30 @@ const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
   const [noteValue, setNoteValue] = useState('');
   const noteSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── #49: Audit-level notes ────────────────────────────────────────────────────
+  const [auditNoteValue, setAuditNoteValue] = useState('');
+  const [auditNoteExpanded, setAuditNoteExpanded] = useState(false);
+  const [auditNoteSaving, setAuditNoteSaving] = useState(false);
+  const auditNoteSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── #46: RAPC column sort ─────────────────────────────────────────────────────
+  const [sortBy, setSortBy] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // ── #53: Needs-review flag + group by activity ────────────────────────────────
+  const [reviewFilter, setReviewFilter] = useState(false);
+  const [groupByActivity, setGroupByActivity] = useState(false);
+
+  // ── #54: Keyboard shortcuts ───────────────────────────────────────────────────
+  const [focusedRow, setFocusedRow] = useState(-1);
+  const [showShortcutsPanel, setShowShortcutsPanel] = useState(false);
+
+  // ── #55: Share expiration ─────────────────────────────────────────────────────
+  const [shareExpiry, setShareExpiry] = useState<'none' | '7' | '30' | '90'>('none');
+
+  // ── #56: Peek panel ──────────────────────────────────────────────────────────
+  const [peekItem, setPeekItem] = useState<AuditItem | null>(null);
+
   // ── #18: apiFetch — wrapper that redirects to login on 401 ──────────────────
   const apiFetch = useCallback(async (url: string, opts?: RequestInit) => {
     const r = await fetch(url, opts);
@@ -569,6 +599,11 @@ const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
     const digits = taxId.replace(/\D/g, '');
     setCnpjCache(prev => { const next = { ...prev }; delete next[digits]; return next; });
   }, []);
+
+  // Sync audit-level note when audit changes
+  useEffect(() => {
+    setAuditNoteValue((lastAuditResult as any)?.auditNotes ?? '');
+  }, [lastAuditResult?.id]);
 
   useEffect(() => {
     setShowCnpjPanel(false);
@@ -1206,6 +1241,78 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
     }, 800);
   };
 
+  // ── #49: Audit-level notes (debounced) ────────────────────────────────────────
+  const handleAuditNoteChange = (value: string) => {
+    setAuditNoteValue(value);
+    setAuditNoteSaving(true);
+    if (auditNoteSaveTimer.current) clearTimeout(auditNoteSaveTimer.current);
+    auditNoteSaveTimer.current = setTimeout(async () => {
+      if (!lastAuditResult) return;
+      await apiFetch(`/api/audits/${lastAuditResult.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auditNotes: value, auditNotesUpdatedAt: new Date().toISOString(), auditNotesUpdatedBy: user?.email }),
+      }).catch(() => {});
+      setAuditNoteSaving(false);
+    }, 1000);
+  };
+
+  // ── #53: Toggle needs-review flag ────────────────────────────────────────────
+  const handleToggleReviewFlag = async (item: AuditItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!lastAuditResult) return;
+    const updated = { ...item, needsReview: !item.needsReview };
+    const newItems = lastAuditResult.items.map(i => i.id === updated.id ? updated : i);
+    setLastAuditResult({ ...lastAuditResult, items: newItems });
+    if (selectedItem?.id === item.id) setSelectedItem(updated);
+    if (peekItem?.id === item.id) setPeekItem(updated);
+    await apiFetch(`/api/audits/${lastAuditResult.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ id: item.id, needsReview: !item.needsReview }] }),
+    }).catch(() => {});
+  };
+
+  // ── #54: Keyboard shortcuts ───────────────────────────────────────────────────
+  const rapcSearchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (activeSection !== 'resultado') return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '?') { e.preventDefault(); setShowShortcutsPanel(p => !p); return; }
+      if (e.key === '/') { e.preventDefault(); rapcSearchRef.current?.focus(); return; }
+      if (e.key === 'Escape') {
+        if (showShortcutsPanel) { setShowShortcutsPanel(false); return; }
+        if (peekItem) { setPeekItem(null); return; }
+        if (selectedItem) { setSelectedItem(null); return; }
+        return;
+      }
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFocusedRow(r => Math.min(r + 1, filteredItems.length - 1));
+        return;
+      }
+      if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFocusedRow(r => Math.max(r - 1, 0));
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === ' ') && focusedRow >= 0 && focusedRow < filteredItems.length) {
+        e.preventDefault();
+        setSelectedItem(filteredItems[focusedRow]);
+        return;
+      }
+      if (e.key === 'p' && focusedRow >= 0 && focusedRow < filteredItems.length) {
+        e.preventDefault();
+        setPeekItem(filteredItems[focusedRow]);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeSection, filteredItems, focusedRow, selectedItem, peekItem, showShortcutsPanel]);
+
   // ── Start audit ──────────────────────────────────────────────────────────────
   const startAudit = async () => {
     if (!files.budget || !files.report || !files.invoices || !files.payments) return;
@@ -1607,14 +1714,29 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
   // ── Computed data ─────────────────────────────────────────────────────────────
   const diligencedItems = lastAuditResult?.items.filter(i => i.status === 'Pendente' || i.status === 'Ressalva') ?? [];
 
-  const filteredItems = (lastAuditResult?.items ?? []).filter(item => {
-    const matchesStatus = statusFilter === 'Todos' || item.status === statusFilter;
-    if (!matchesStatus) return false;
-    if (!rapcSearch) return true;
-    const q = rapcSearch.toLowerCase();
-    return [item.description, item.activity, item.entity, item.docId, item.taxId, item.date, String(item.value), item.status, item.nfPage, item.paymentPage, item.observations]
-      .some(v => String(v || '').toLowerCase().includes(q));
-  });
+  const filteredItems = (() => {
+    let items = (lastAuditResult?.items ?? []).filter(item => {
+      const matchesStatus = statusFilter === 'Todos' || item.status === statusFilter;
+      if (!matchesStatus) return false;
+      if (reviewFilter && !item.needsReview) return false;
+      if (!rapcSearch) return true;
+      const q = rapcSearch.toLowerCase();
+      return [item.description, item.activity, item.entity, item.docId, item.taxId, item.date, String(item.value), item.status, item.nfPage, item.paymentPage, item.observations]
+        .some(v => String(v || '').toLowerCase().includes(q));
+    });
+    if (sortBy) {
+      items = [...items].sort((a: any, b: any) => {
+        let va = a[sortBy], vb = b[sortBy];
+        if (sortBy === 'value') { va = Number(va) || 0; vb = Number(vb) || 0; }
+        else if (sortBy === 'date') { va = new Date(va?.split('/').reverse().join('-') || 0).getTime(); vb = new Date(vb?.split('/').reverse().join('-') || 0).getTime(); }
+        else { va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase(); }
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return items;
+  })();
 
   return (
     <>
@@ -1911,7 +2033,7 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                     <div className="flex items-center gap-3 flex-1">
                       <span className="text-[10px] text-text-secondary uppercase tracking-widest">Código de acesso:</span>
                       <span className="font-mono font-bold text-primary text-base tracking-[0.3em]">{lastAuditResult.shareAccessCode}</span>
-                      <span className="text-[9px] text-text-secondary/60">· Válido 60 dias · Envie separadamente do link por segurança</span>
+                      <span className="text-[9px] text-text-secondary/60">· Envie separadamente do link por segurança</span>
                     </div>
                     <button
                       onClick={() => navigator.clipboard.writeText(lastAuditResult.shareAccessCode!)}
@@ -1921,6 +2043,47 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                     </button>
                   </div>
                 )}
+                {/* #55 Expiry controls */}
+                <div className="flex items-center gap-3 pt-2 border-t border-line flex-wrap">
+                  <Clock size={12} className="text-text-secondary shrink-0" />
+                  <span className="text-[10px] text-text-secondary uppercase tracking-widest">Validade do link:</span>
+                  <div className="flex gap-1">
+                    {([['none', 'Sem expiração'], ['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias']] as const).map(([val, lbl]) => (
+                      <button
+                        key={val}
+                        onClick={() => {
+                          setShareExpiry(val);
+                          if (val !== 'none' && lastAuditResult?.id) {
+                            apiFetch(`/api/audits/${lastAuditResult.id}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ shareExpiresAt: val === 'none' ? null : new Date(Date.now() + Number(val) * 86400000).toISOString() }),
+                            }).catch(() => {});
+                          }
+                        }}
+                        className={cn('px-2 py-0.5 text-[9px] font-bold uppercase rounded border transition-all', shareExpiry === val ? 'border-primary/50 bg-primary/10 text-primary' : 'border-line text-text-secondary hover:text-text')}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!lastAuditResult?.id) return;
+                      if (!confirm('Revogar o link de compartilhamento? Isso tornará o link atual inválido.')) return;
+                      await apiFetch(`/api/audits/${lastAuditResult.id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ shareToken: null, shareAccessCode: null }),
+                      }).catch(() => {});
+                      setLastAuditResult({ ...lastAuditResult, shareToken: undefined, shareAccessCode: undefined });
+                      addToast('success', 'Link de compartilhamento revogado');
+                    }}
+                    className="ml-auto text-[9px] text-error/70 hover:text-error border border-error/20 hover:border-error/40 px-2 py-0.5 rounded transition-all"
+                  >
+                    Revogar link
+                  </button>
+                </div>
               </div>
             )}
 
@@ -2008,6 +2171,36 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
               </div>
             </div>
 
+            {/* #49 Audit notes */}
+            <div className="bg-card border border-line rounded mb-10">
+              <button
+                onClick={() => setAuditNoteExpanded(p => !p)}
+                className="w-full px-5 py-3.5 flex items-center justify-between text-[11px] font-bold uppercase tracking-widest text-text-secondary hover:text-text transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <NotebookPen size={13} className="text-primary" />
+                  Notas do Auditor
+                  {auditNoteValue && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
+                </span>
+                <span className="flex items-center gap-2">
+                  {auditNoteSaving && <Loader2 size={11} className="animate-spin text-primary" />}
+                  {auditNoteExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </span>
+              </button>
+              {auditNoteExpanded && (
+                <div className="px-5 pb-4 border-t border-line">
+                  <textarea
+                    value={auditNoteValue}
+                    onChange={e => handleAuditNoteChange(e.target.value)}
+                    placeholder="Adicione observações gerais sobre esta auditoria (visível apenas para usuários autenticados)..."
+                    className="w-full mt-3 bg-bg border border-line rounded p-3 text-[12px] text-text placeholder:text-text-secondary/50 resize-y min-h-[80px] focus:outline-none focus:border-primary transition-colors font-mono"
+                    rows={4}
+                  />
+                  <p className="text-[9px] text-text-secondary mt-1">Salvo automaticamente · Vinculado ao auditor: {user?.email}</p>
+                </div>
+              )}
+            </div>
+
             {/* RAPC Table */}
             <div className="bg-card border border-line rounded overflow-hidden mb-10">
               <div className="px-6 py-4 border-b border-line flex justify-between items-center bg-bg/50 flex-wrap gap-3">
@@ -2019,12 +2212,13 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                   <div className="relative">
                     <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
                     <input
+                      ref={rapcSearchRef}
                       type="text"
                       value={rapcSearch}
                       onChange={e => setRapcSearch(e.target.value)}
-                      placeholder="Buscar lançamento..."
+                      placeholder="Buscar lançamento... (/)"
                       aria-label="Buscar lançamento na tabela RAPC"
-                      className="pl-7 pr-3 py-1.5 text-[11px] bg-sidebar border border-line rounded focus:outline-none focus:border-primary transition-colors w-48 text-text placeholder:text-text-secondary/50"
+                      className="pl-7 pr-3 py-1.5 text-[11px] bg-sidebar border border-line rounded focus:outline-none focus:border-primary transition-colors w-52 text-text placeholder:text-text-secondary/50"
                     />
                     {rapcSearch && (
                       <button onClick={() => setRapcSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text">
@@ -2040,6 +2234,22 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                       </button>
                     ))}
                   </div>
+                  {/* #53 Review filter */}
+                  <button
+                    onClick={() => setReviewFilter(p => !p)}
+                    className={cn('flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-bold uppercase tracking-widest transition-all rounded', reviewFilter ? 'border-amber-500/50 bg-amber-500/10 text-amber-400' : 'border-line bg-sidebar text-text-secondary hover:text-text')}
+                    title="Filtrar itens marcados para revisão"
+                  >
+                    <Flag size={11} /> Revisão
+                  </button>
+                  {/* #47 Group by activity */}
+                  <button
+                    onClick={() => setGroupByActivity(p => !p)}
+                    className={cn('flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-bold uppercase tracking-widest transition-all rounded', groupByActivity ? 'border-primary/50 bg-primary/10 text-primary' : 'border-line bg-sidebar text-text-secondary hover:text-text')}
+                    title="Agrupar por atividade/rubrica"
+                  >
+                    <Layers size={11} /> Agrupar
+                  </button>
                   <button onClick={handleDownloadCSV} className="flex items-center gap-2 px-3 py-1.5 bg-sidebar border border-line hover:border-primary text-[10px] font-bold uppercase tracking-widest transition-all">
                     <Download size={12} /> CSV
                   </button>
@@ -2060,8 +2270,36 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                       Reanalisar Pendentes/Ressalvas ({diligencedItems.length})
                     </button>
                   )}
+                  {/* #54 Keyboard shortcuts hint */}
+                  <button
+                    onClick={() => setShowShortcutsPanel(p => !p)}
+                    title="Atalhos de teclado (?)"
+                    className={cn('p-1.5 border rounded transition-all', showShortcutsPanel ? 'border-primary/50 text-primary bg-primary/10' : 'border-line text-text-secondary hover:text-text')}
+                  >
+                    <Keyboard size={12} />
+                  </button>
                 </div>
               </div>
+              {showShortcutsPanel && (
+                <div className="px-6 py-3 bg-sidebar border-b border-line text-[10px] text-text-secondary">
+                  <div className="flex flex-wrap gap-x-6 gap-y-1.5">
+                    {[
+                      ['j / ↓', 'Próxima linha'],
+                      ['k / ↑', 'Linha anterior'],
+                      ['Enter', 'Abrir detalhe'],
+                      ['p', 'Prévia rápida'],
+                      ['/', 'Buscar'],
+                      ['Esc', 'Fechar / Voltar'],
+                      ['?', 'Mostrar atalhos'],
+                    ].map(([key, desc]) => (
+                      <span key={key} className="flex items-center gap-1.5">
+                        <kbd className="px-1.5 py-0.5 bg-bg border border-line rounded text-[9px] font-mono font-bold text-primary">{key}</kbd>
+                        <span>{desc}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {reauditLoading && reauditMessage && (
                 <div className="px-6 py-2 bg-warning/5 border-b border-warning/20 text-[11px] text-warning flex items-center gap-2">
                   <Loader2 size={11} className="animate-spin shrink-0" /> {reauditMessage}
@@ -2073,54 +2311,84 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
                 </div>
               )}
               <div className="overflow-x-auto custom-scrollbar">
-                <table className="w-full text-left text-[11px] border-collapse">
+                <table className="w-full text-left text-[11px] border-collapse" role="grid" aria-label="Relatório de Conciliação">
                   <thead className="bg-sidebar text-text-secondary uppercase text-[10px] tracking-tighter">
                     <tr className="border-b border-line">
-                      {['#', 'Código', 'Descrição', 'Atividade', 'Data', 'Razão Social', 'ID Doc Fiscal', 'CNPJ/CPF', 'Valor', 'Status', 'Pág NF', 'Pág PG', 'Observações'].map((h, i) => (
-                        <th key={i} className={cn('px-4 py-3 font-semibold border-r border-line', h === 'Valor' && 'text-right', ['Data', 'Status', 'Pág NF', 'Pág PG'].includes(h) && 'text-center')}>{h}</th>
+                      {([
+                        { label: '#', field: null },
+                        { label: 'Código', field: null },
+                        { label: 'Descrição', field: 'description' },
+                        { label: 'Atividade', field: 'activity' },
+                        { label: 'Data', field: 'date' },
+                        { label: 'Razão Social', field: 'entity' },
+                        { label: 'ID Doc Fiscal', field: null },
+                        { label: 'CNPJ/CPF', field: null },
+                        { label: 'Valor', field: 'value' },
+                        { label: 'Status', field: 'status' },
+                        { label: 'Pág NF', field: null },
+                        { label: 'Pág PG', field: null },
+                        { label: 'Observações', field: null },
+                        { label: '', field: null },
+                      ] as { label: string; field: string | null }[]).map(({ label, field }, i) => (
+                        <th
+                          key={i}
+                          onClick={field ? () => { if (sortBy === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortBy(field); setSortDir('asc'); } } : undefined}
+                          className={cn(
+                            'px-4 py-3 font-semibold border-r border-line select-none',
+                            label === 'Valor' && 'text-right',
+                            ['Data', 'Status', 'Pág NF', 'Pág PG'].includes(label) && 'text-center',
+                            field && 'cursor-pointer hover:text-text hover:bg-bg/30 transition-colors',
+                          )}
+                          aria-sort={field && sortBy === field ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            {label}
+                            {field && sortBy === field && (sortDir === 'asc' ? <ChevronUp size={10} className="text-primary" /> : <ChevronDown size={10} className="text-primary" />)}
+                            {field && sortBy !== field && <ChevronUp size={10} className="opacity-0 group-hover:opacity-30" />}
+                          </span>
+                        </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line font-mono">
-                    {filteredItems.map((item, idx) => (
-                      <tr key={idx} onClick={() => setSelectedItem(item)} className={cn('hover:bg-primary/5 transition-colors cursor-pointer', item.status === 'Ressalva' && 'bg-warning/5', item.status === 'Pendente' && 'bg-error/5')}>
-                        <td className="px-4 py-2.5 text-text-secondary border-r border-line uppercase">{item.id || idx + 1}</td>
-                        <td className="px-2 py-2.5 border-r border-line/20" onClick={e => e.stopPropagation()}>
-                          {item.itemCode && (
-                            <button
-                              onClick={() => navigator.clipboard.writeText(`${window.location.origin}/?item=${item.itemCode}`)}
-                              className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-mono bg-sidebar border border-line hover:border-primary text-text-secondary hover:text-primary transition-all rounded"
-                              title="Copiar link deste lançamento"
-                            >
-                              <Link2 size={9} />{item.itemCode}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 text-text border-r border-line/20 font-sans uppercase">{item.description}</td>
-                        <td className="px-4 py-2.5 text-text-secondary border-r border-line/20 font-sans uppercase">{item.activity}</td>
-                        <td className="px-4 py-2.5 text-center whitespace-nowrap border-r border-line/20 uppercase">{item.date}</td>
-                        <td className="px-4 py-2.5 border-r border-line/20 uppercase">{(() => { const d = item.taxId?.replace(/\D/g,'') ?? ''; const cached = d.length === 14 ? cnpjCache[d] : undefined; const persisted = d.length === 14 ? lastAuditResult?.cnpjData?.[d] : undefined; const src = (cached && cached !== 'error') ? cached as CNPJData : (persisted && persisted !== 'error') ? persisted as CNPJData : undefined; return src?.razao_social || item.entity; })()}</td>
-                        <td className="px-4 py-2.5 text-[9px] text-primary border-r border-line/20 uppercase">{item.docId}</td>
-                        <td className="px-4 py-2.5 text-[9px] whitespace-nowrap border-r border-line/20 uppercase">{formatTaxId(item.taxId)}</td>
-                        <td className="px-4 py-2.5 text-right font-bold border-r border-line/20">{formatCurrency(item.value)}</td>
-                        <td className="px-4 py-2.5 border-r border-line/20">
-                          <div className={cn('mx-auto w-fit px-2 py-0.5 rounded-sm text-[9px] font-bold uppercase', item.status === 'Conciliado' && 'bg-success/10 text-success border border-success/30', item.status === 'Ressalva' && 'bg-warning/10 text-warning border border-warning/30', item.status === 'Pendente' && 'bg-error/10 text-error border border-error/30')}>{item.status}</div>
-                        </td>
-                        <td className="px-4 py-2.5 text-center text-text-secondary border-r border-line/20 uppercase">{item.nfPage || '-'}</td>
-                        <td className="px-4 py-2.5 text-center text-text-secondary border-r border-line/20 uppercase">{item.paymentPage || '-'}</td>
-                        <td className="px-4 py-2.5 text-text-secondary font-sans leading-tight text-[10px] uppercase">{item.observations}</td>
-                      </tr>
-                    ))}
-                    {filteredItems.length === 0 && (
+                    {filteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={13}>
+                        <td colSpan={14}>
                           <EmptyState
-                            icon={rapcSearch ? Search : FileText}
-                            title={rapcSearch ? `Nenhum resultado para "${rapcSearch}"` : `Nenhum item com status "${statusFilter}"`}
-                            description={rapcSearch ? 'Tente outros termos de busca.' : 'Mude o filtro de status para ver outros itens.'}
+                            icon={rapcSearch ? Search : reviewFilter ? Flag : FileText}
+                            title={rapcSearch ? `Nenhum resultado para "${rapcSearch}"` : reviewFilter ? 'Nenhum item marcado para revisão' : `Nenhum item com status "${statusFilter}"`}
+                            description={rapcSearch ? 'Tente outros termos de busca.' : reviewFilter ? 'Use o ícone de bandeira nas linhas para marcar itens.' : 'Mude o filtro de status para ver outros itens.'}
                           />
                         </td>
                       </tr>
+                    ) : groupByActivity ? (
+                      /* #47 Grouped by activity */
+                      Object.entries(
+                        filteredItems.reduce((acc: Record<string, AuditItem[]>, item) => {
+                          const key = item.activity || 'Não Classificado';
+                          (acc[key] = acc[key] || []).push(item);
+                          return acc;
+                        }, {})
+                      ).sort(([a], [b]) => a.localeCompare(b)).map(([activity, groupItems]) => (
+                        <React.Fragment key={activity}>
+                          <tr className="bg-sidebar/70">
+                            <td colSpan={14} className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-primary border-r border-line">
+                              <span className="flex items-center gap-2">
+                                <Layers size={10} />
+                                {activity}
+                                <span className="text-text-secondary font-normal">({groupItems.length} lançamento{groupItems.length !== 1 ? 's' : ''} · {formatCurrency(groupItems.reduce((s, i) => s + (i.value || 0), 0))})</span>
+                              </span>
+                            </td>
+                          </tr>
+                          {groupItems.map((item, idx) => (
+                            <RapcTableRow key={item.id ?? idx} item={item} idx={idx} focusedRow={focusedRow} filteredItems={filteredItems} onSelect={setSelectedItem} onPeek={setPeekItem} onFlag={handleToggleReviewFlag} cnpjCache={cnpjCache} auditResult={lastAuditResult!} />
+                          ))}
+                        </React.Fragment>
+                      ))
+                    ) : (
+                      filteredItems.map((item, idx) => (
+                        <RapcTableRow key={item.id ?? idx} item={item} idx={idx} focusedRow={focusedRow} filteredItems={filteredItems} onSelect={setSelectedItem} onPeek={setPeekItem} onFlag={handleToggleReviewFlag} cnpjCache={cnpjCache} auditResult={lastAuditResult!} />
+                      ))
                     )}
                   </tbody>
                 </table>
@@ -3210,6 +3478,68 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
           </ItemDetailModal>
         )}
 
+        {/* #56 Peek panel — lightweight side panel */}
+        {peekItem && !selectedItem && (
+          <div className="fixed right-0 top-8 bottom-0 w-[380px] bg-card border-l border-line z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-4 duration-300">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-line shrink-0 bg-sidebar">
+              <div className="flex items-center gap-3">
+                <span className={cn('px-2 py-0.5 rounded text-[9px] font-bold uppercase border',
+                  peekItem.status === 'Conciliado' && 'bg-success/10 text-success border-success/30',
+                  peekItem.status === 'Ressalva' && 'bg-warning/10 text-warning border-warning/30',
+                  peekItem.status === 'Pendente' && 'bg-error/10 text-error border-error/30',
+                )}>{peekItem.status}</span>
+                <span className="text-[11px] font-bold font-mono text-text-secondary">#{peekItem.id}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => { setSelectedItem(peekItem); setPeekItem(null); }}
+                  className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest bg-primary/10 text-primary border border-primary/30 rounded hover:bg-primary/20 transition-colors"
+                >
+                  Abrir completo
+                </button>
+                <button onClick={() => setPeekItem(null)} className="p-1.5 text-text-secondary hover:text-text transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 text-[11px]">
+              <div>
+                <p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Descrição</p>
+                <p className="font-bold text-text uppercase">{peekItem.description}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Data</p><p className="font-mono">{peekItem.date}</p></div>
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Valor</p><p className="font-mono font-bold text-primary">{formatCurrency(peekItem.value)}</p></div>
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Atividade</p><p className="uppercase">{peekItem.activity}</p></div>
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">CNPJ/CPF</p><p className="font-mono">{formatTaxId(peekItem.taxId)}</p></div>
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Pág NF</p><p className="font-mono">{peekItem.nfPage || '-'}</p></div>
+                <div><p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Pág Pgto</p><p className="font-mono">{peekItem.paymentPage || '-'}</p></div>
+              </div>
+              {peekItem.observations && (
+                <div>
+                  <p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1">Observações</p>
+                  <p className="text-text-secondary leading-relaxed uppercase">{peekItem.observations}</p>
+                </div>
+              )}
+              {peekItem.auditorNote && (
+                <div className="p-3 bg-primary/5 border border-primary/20 rounded">
+                  <p className="text-text-secondary uppercase tracking-widest text-[9px] mb-1 flex items-center gap-1"><NotebookPen size={9} /> Nota do auditor</p>
+                  <p className="text-text">{peekItem.auditorNote}</p>
+                </div>
+              )}
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  onClick={e => handleToggleReviewFlag(peekItem, e)}
+                  className={cn('flex items-center gap-1.5 px-3 py-1.5 border rounded text-[10px] font-bold uppercase tracking-widest transition-all', peekItem.needsReview ? 'border-amber-500/50 bg-amber-500/10 text-amber-400' : 'border-line text-text-secondary hover:text-text')}
+                >
+                  <Flag size={11} fill={peekItem.needsReview ? 'currentColor' : 'none'} />
+                  {peekItem.needsReview ? 'Remover revisão' : 'Marcar para revisão'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
 
       <footer className="fixed bottom-0 left-[180px] right-0 py-3 px-6 bg-sidebar border-t border-line text-[10px] text-text-secondary text-center leading-relaxed z-40">
@@ -3305,9 +3635,26 @@ function UploadSlot({ label, description, file, onFileSelect }: { label: string;
         </div>
       </div>
       {file && (
-        <div className="flex items-center gap-2 mt-1 text-[10px] font-mono text-primary">
-          <span className="truncate">{truncateFileName(file.name, 28)}</span>
-          <span className="text-text-secondary shrink-0">({(file.size / 1024).toFixed(0)} KB)</span>
+        <div className="mt-1 space-y-1">
+          <div className="flex items-center gap-2 text-[10px] font-mono text-primary">
+            <span className="truncate">{truncateFileName(file.name, 28)}</span>
+            <span className="text-text-secondary shrink-0">{file.size > 1024 * 1024 ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : `${(file.size / 1024).toFixed(0)} KB`}</span>
+          </div>
+          {/* #52: CSV row count + size warning */}
+          {file.type === 'csv' && Array.isArray(file.content) && (
+            <div className="flex items-center gap-2 text-[9px] font-mono text-text-secondary">
+              <span>{(file.content as any[]).length} linhas</span>
+              {Object.keys((file.content as any[])[0] ?? {}).length > 0 && (
+                <span>· {Object.keys((file.content as any[])[0]).length} colunas</span>
+              )}
+            </div>
+          )}
+          {file.size > 20 * 1024 * 1024 && (
+            <div className="flex items-center gap-1 text-[9px] text-amber-400">
+              <AlertCircle size={9} />
+              Arquivo grande — pode aumentar o tempo de processamento
+            </div>
+          )}
         </div>
       )}
       {!file && <p className="text-[10px] text-text-secondary/60 italic mt-auto">Clique ou arraste aqui</p>}
@@ -3466,6 +3813,79 @@ function SkeletonRow({ cols }: { cols: number[] }) {
         <div key={i} className="skeleton h-4 rounded" style={{ flex }} />
       ))}
     </div>
+  );
+}
+
+// ── #46/#53/#56: RAPC table row (extracted for reuse with group-by) ────────────
+function RapcTableRow({
+  item, idx, focusedRow, filteredItems, onSelect, onPeek, onFlag, cnpjCache, auditResult
+}: {
+  item: AuditItem; idx: number; focusedRow: number; filteredItems: AuditItem[];
+  onSelect: (i: AuditItem) => void; onPeek: (i: AuditItem) => void;
+  onFlag: (i: AuditItem, e: React.MouseEvent) => void;
+  cnpjCache: Record<string, CNPJData | 'error' | null>; auditResult: AuditResult;
+}) {
+  const isFocused = filteredItems[focusedRow]?.id === item.id;
+  const d = item.taxId?.replace(/\D/g, '') ?? '';
+  const cached = d.length === 14 ? cnpjCache[d] : undefined;
+  const persisted = d.length === 14 ? auditResult?.cnpjData?.[d] : undefined;
+  const src = (cached && cached !== 'error') ? cached as CNPJData : (persisted && persisted !== 'error') ? persisted as CNPJData : undefined;
+  return (
+    <tr
+      onClick={() => onSelect(item)}
+      className={cn(
+        'hover:bg-primary/5 transition-colors cursor-pointer',
+        item.status === 'Ressalva' && 'bg-warning/5',
+        item.status === 'Pendente' && 'bg-error/5',
+        isFocused && 'ring-1 ring-inset ring-primary',
+      )}
+      role="row"
+      aria-selected={isFocused}
+    >
+      <td className="px-4 py-2.5 text-text-secondary border-r border-line uppercase">{item.id || idx + 1}</td>
+      <td className="px-2 py-2.5 border-r border-line/20" onClick={e => e.stopPropagation()}>
+        {item.itemCode && (
+          <button
+            onClick={() => navigator.clipboard.writeText(`${window.location.origin}/?item=${item.itemCode}`)}
+            className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-mono bg-sidebar border border-line hover:border-primary text-text-secondary hover:text-primary transition-all rounded"
+            title="Copiar link deste lançamento"
+          >
+            <Link2 size={9} />{item.itemCode}
+          </button>
+        )}
+      </td>
+      <td className="px-4 py-2.5 text-text border-r border-line/20 font-sans uppercase">{item.description}</td>
+      <td className="px-4 py-2.5 text-text-secondary border-r border-line/20 font-sans uppercase">{item.activity}</td>
+      <td className="px-4 py-2.5 text-center whitespace-nowrap border-r border-line/20 uppercase">{item.date}</td>
+      <td className="px-4 py-2.5 border-r border-line/20 uppercase">{src?.razao_social || item.entity}</td>
+      <td className="px-4 py-2.5 text-[9px] text-primary border-r border-line/20 uppercase">{item.docId}</td>
+      <td className="px-4 py-2.5 text-[9px] whitespace-nowrap border-r border-line/20 uppercase">{formatTaxId(item.taxId)}</td>
+      <td className="px-4 py-2.5 text-right font-bold border-r border-line/20">{formatCurrency(item.value)}</td>
+      <td className="px-4 py-2.5 border-r border-line/20">
+        <div className={cn('mx-auto w-fit px-2 py-0.5 rounded-sm text-[9px] font-bold uppercase', item.status === 'Conciliado' && 'bg-success/10 text-success border border-success/30', item.status === 'Ressalva' && 'bg-warning/10 text-warning border border-warning/30', item.status === 'Pendente' && 'bg-error/10 text-error border border-error/30')}>{item.status}</div>
+      </td>
+      <td className="px-4 py-2.5 text-center text-text-secondary border-r border-line/20 uppercase">{item.nfPage || '-'}</td>
+      <td className="px-4 py-2.5 text-center text-text-secondary border-r border-line/20 uppercase">{item.paymentPage || '-'}</td>
+      <td className="px-4 py-2.5 text-text-secondary font-sans leading-tight text-[10px] uppercase border-r border-line/20">{item.observations}</td>
+      <td className="px-2 py-2.5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={e => onFlag(item, e)}
+            title={item.needsReview ? 'Remover marcação de revisão' : 'Marcar para revisão'}
+            className={cn('p-1 rounded transition-colors', item.needsReview ? 'text-amber-400 hover:text-amber-300' : 'text-text-secondary/30 hover:text-amber-400')}
+          >
+            <Flag size={11} fill={item.needsReview ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); onPeek(item); }}
+            title="Prévia rápida (peek)"
+            className="p-1 rounded text-text-secondary/30 hover:text-primary transition-colors"
+          >
+            <ChevronRight size={11} />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 
