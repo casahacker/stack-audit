@@ -78,6 +78,13 @@ function formatTaxId(taxId: string): string {
   return taxId;
 }
 
+function isPageDownloadable(pageRef: string | undefined): boolean {
+  if (!pageRef) return false;
+  const norm = pageRef.replace(/pág\.?\s*/gi, '').trim();
+  if (/^(n\/a|não localizado|dispensado|pendente|não encontrado|-+)$/i.test(norm)) return false;
+  return /\d/.test(norm);
+}
+
 function computeBudgetLines(budgetCsv: any[], items: AuditItem[], pcCsv?: any[]): BudgetLine[] {
   const sampleRow = budgetCsv[0];
   if (!sampleRow) return [];
@@ -1321,7 +1328,13 @@ table.rapc tr.row-pend td { background: #fff1f2; }
         </main>
 
         {/* Item detail modal (reused) */}
-        {selectedItem && (
+        {selectedItem && (() => {
+          const auditId = lastAuditResult?.id;
+          const canDownloadNf = isPageDownloadable(selectedItem.nfPage);
+          const canDownloadPay = isPageDownloadable(selectedItem.paymentPage);
+          const docUrl = (type: 'nf' | 'payment') =>
+            `/api/audits/${auditId}/items/${selectedItem.id}/doc?type=${type}`;
+          return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedItem(null)}>
             <div className="bg-card border border-line rounded-xl w-full max-w-5xl max-h-[92vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-6 py-4 border-b border-line sticky top-0 bg-card z-10">
@@ -1372,10 +1385,56 @@ table.rapc tr.row-pend td { background: #fff1f2; }
                 {selectedItem.observations && (
                   <div className="mt-4 p-3 bg-warning/5 border border-warning/20 rounded text-warning text-[11px] uppercase">{selectedItem.observations}</div>
                 )}
+
+                {/* ── Download doc PDFs ──────────────────────────────────── */}
+                {auditId && (canDownloadNf || canDownloadPay) && (
+                  <div className="mt-5 pt-4 border-t border-line">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-text-secondary mb-3">Exportar Documentos</p>
+                    <div className="flex gap-3 flex-wrap">
+                      <a
+                        href={canDownloadNf ? docUrl('nf') : undefined}
+                        download
+                        aria-disabled={!canDownloadNf}
+                        className={cn(
+                          'flex items-center gap-2 px-3 py-2 rounded border text-[11px] font-bold uppercase tracking-widest transition-all',
+                          canDownloadNf
+                            ? 'bg-sidebar border-line hover:border-primary hover:text-primary text-text-secondary cursor-pointer'
+                            : 'border-line/40 text-text-secondary/30 cursor-not-allowed pointer-events-none'
+                        )}
+                        title={canDownloadNf ? `Baixar PDF — Pág(s): ${selectedItem.nfPage}` : `Página não identificada (${selectedItem.nfPage || 'N/A'})`}
+                      >
+                        <FileDown size={13} />
+                        Doc Fiscal (NF)
+                        {selectedItem.nfPage && selectedItem.nfPage !== 'N/A' && (
+                          <span className="font-mono text-[9px] text-text-secondary/60 ml-1">{selectedItem.nfPage}</span>
+                        )}
+                      </a>
+                      <a
+                        href={canDownloadPay ? docUrl('payment') : undefined}
+                        download
+                        aria-disabled={!canDownloadPay}
+                        className={cn(
+                          'flex items-center gap-2 px-3 py-2 rounded border text-[11px] font-bold uppercase tracking-widest transition-all',
+                          canDownloadPay
+                            ? 'bg-sidebar border-line hover:border-primary hover:text-primary text-text-secondary cursor-pointer'
+                            : 'border-line/40 text-text-secondary/30 cursor-not-allowed pointer-events-none'
+                        )}
+                        title={canDownloadPay ? `Baixar PDF — Pág(s): ${selectedItem.paymentPage}` : `Página não identificada (${selectedItem.paymentPage || 'N/A'})`}
+                      >
+                        <FileDown size={13} />
+                        Comprovante de Pagamento
+                        {selectedItem.paymentPage && selectedItem.paymentPage !== 'N/A' && (
+                          <span className="font-mono text-[9px] text-text-secondary/60 ml-1">{selectedItem.paymentPage}</span>
+                        )}
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     );
   }

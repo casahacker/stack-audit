@@ -1051,6 +1051,120 @@ app.get("/api/items/:code", requireAuth, (req, res) => {
   res.status(404).json({ error: "Lançamento não encontrado" });
 });
 
+// ── API: download item document (NF or payment) as PDF ───────────────────────
+// Extracts the relevant pages from the source PDF using poppler-utils.
+
+function parsePageString(raw: string): number[] {
+  if (!raw) return [];
+  const norm = raw.replace(/pág\.?\s*/gi, '').replace(/página\s*/gi, '').trim();
+  if (!norm || /^(n\/a|não localizado|dispensado|pendente|não encontrado)$/i.test(norm)) return [];
+  const pages = new Set<number>();
+  for (const part of norm.split(/[,;]/)) {
+    const range = part.trim().match(/^(\d+)\s*[-–]\s*(\d+)$/);
+    if (range) {
+      const from = parseInt(range[1], 10);
+      const to = parseInt(range[2], 10);
+      for (let p = from; p <= to; p++) pages.add(p);
+    } else {
+      const num = parseInt(part.trim(), 10);
+      if (!isNaN(num) && num > 0) pages.add(num);
+    }
+  }
+  return [...pages].sort((a, b) => a - b);
+}
+
+function slugify(s: string): string {
+  return String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 40);
+}
+
+app.get("/api/audits/:id/items/:itemId/doc", requireAuth, async (req: any, res) => {
+  const safeId = sanitizeSegment(req.params.id as string);
+  const itemId = parseInt(req.params.itemId as string, 10);
+  const type = String(req.query.type ?? '');
+
+  if (!safeId || isNaN(itemId)) return res.status(400).json({ error: "Parâmetros inválidos" });
+  if (type !== 'nf' && type !== 'payment') return res.status(400).json({ error: "type deve ser 'nf' ou 'payment'" });
+
+  const auditDir = path.join(AUDITS_DIR, safeId);
+  const resultPath = path.join(auditDir, "result.json");
+  if (!fs.existsSync(resultPath)) return res.status(404).json({ error: "Auditoria não encontrada" });
+
+  let audit: any;
+  try { audit = JSON.parse(fs.readFileSync(resultPath, "utf-8")); }
+  catch { return res.status(500).json({ error: "Erro ao ler auditoria" }); }
+
+  if (audit.createdBy !== req.user?.email) return res.status(403).json({ error: "Proibido" });
+
+  const item = (audit.items as any[]).find((i: any) => i.id === itemId);
+  if (!item) return res.status(404).json({ error: "Lançamento não encontrado" });
+
+  const sf = audit.sourceFiles || {};
+  const sourceFile = type === 'nf' ? sf.invoices : sf.payments;
+  if (!sourceFile) return res.status(404).json({ error: "Arquivo fonte não encontrado" });
+
+  const sourcePath = path.join(auditDir, sourceFile);
+  if (!path.resolve(sourcePath).startsWith(path.resolve(auditDir) + path.sep))
+    return res.status(403).json({ error: "Acesso negado" });
+  if (!fs.existsSync(sourcePath)) return res.status(404).json({ error: "PDF fonte não encontrado" });
+
+  const pageRef = type === 'nf' ? (item.nfPage || '') : (item.paymentPage || '');
+  const pages = parsePageString(pageRef);
+  if (pages.length === 0) return res.status(422).json({ error: `Página(s) não identificada(s) para este lançamento (${pageRef || 'N/A'})` });
+
+  // Build filename
+  const docIdSlug  = slugify(item.docId);
+  const entitySlug = slugify(item.entity);
+  const dateSlug   = slugify(item.date);
+  const txSlug     = item.transactionId ? slugify(item.transactionId) : docIdSlug;
+  const filename   = type === 'nf'
+    ? `NF_${docIdSlug}_${entitySlug}_${dateSlug}.pdf`
+    : `Comprovante_${txSlug}_${entitySlug}_${dateSlug}.pdf`;
+
+  const tmpDir = fs.mkdtempSync(path.join(DATA_DIR, "tmp_doc_"));
+  try {
+    // Extract each page as individual PDF
+    const pageFiles: string[] = [];
+    for (const p of pages) {
+      const outBase = path.join(tmpDir, `page_%04d.pdf`);
+      await execFileAsync("pdfseparate", ["-f", String(p), "-l", String(p), sourcePath, outBase]);
+      const produced = fs.readdirSync(tmpDir)
+        .filter(f => f.startsWith("page_") && f.endsWith(".pdf"))
+        .map(f => path.join(tmpDir, f))
+        .filter(f => !pageFiles.includes(f))
+        .sort();
+      pageFiles.push(...produced);
+    }
+
+    if (pageFiles.length === 0) {
+      return res.status(422).json({ error: "Página(s) não encontrada(s) no PDF" });
+    }
+
+    let finalPdf: string;
+    if (pageFiles.length === 1) {
+      finalPdf = pageFiles[0];
+    } else {
+      finalPdf = path.join(tmpDir, "output.pdf");
+      await execFileAsync("pdfunite", [...pageFiles, finalPdf]);
+    }
+
+    const pdfBuffer = fs.readFileSync(finalPdf);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (e: any) {
+    console.error("[doc-extract]", e.message);
+    res.status(500).json({ error: "Erro ao extrair páginas do PDF: " + e.message });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ── API: public share link ────────────────────────────────────────────────────
 
 app.get("/api/share/:token", (req, res) => {
