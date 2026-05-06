@@ -37,7 +37,7 @@ import Papa from 'papaparse';
 import { AuditResult, FileData, AuditItem, AuthUser, BudgetLine, CNPJData } from './types';
 import { processAudit, reprocessItems } from './services/auditService';
 
-type Section = 'nova' | 'processando' | 'resultado' | 'historico' | 'documentacao';
+type Section = 'nova' | 'processando' | 'resultado' | 'historico' | 'pesquisa' | 'documentacao';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -295,6 +295,13 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [activeSection, setActiveSection] = useState<Section>('nova');
+
+  // ── Pesquisa global ───────────────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchMeta, setSearchMeta] = useState<{ total: number; detectedType: string } | null>(null);
+  const [searchError, setSearchError] = useState('');
   const [files, setFiles] = useState<Record<string, FileData | null>>({
     budget: null, report: null, invoices: null, payments: null,
   });
@@ -1543,6 +1550,7 @@ table.rapc tr.row-pend td { background: #fff1f2; }
             { id: 'processando', label: 'Processando', icon: Loader2 },
             { id: 'resultado', label: 'Resultado', icon: FileText },
             { id: 'historico', label: 'Histórico', icon: History },
+            { id: 'pesquisa', label: 'Pesquisa', icon: Search },
             { id: 'documentacao', label: 'Documentação', icon: BookOpen },
           ].map((item) => (
             <button
@@ -2713,6 +2721,61 @@ table.rapc tr.row-pend td { background: #fff1f2; }
                     </div>
                   </div>
                 </div>
+
+                {/* ── Download doc PDFs ──────────────────────────────────── */}
+                {(() => {
+                  const auditId = lastAuditResult?.id;
+                  const canDownloadNf = isPageDownloadable(selectedItem.nfPage);
+                  const canDownloadPay = isPageDownloadable(selectedItem.paymentPage);
+                  const docUrl = (type: 'nf' | 'payment') =>
+                    `/api/audits/${auditId}/items/${selectedItem.id}/doc?type=${type}`;
+                  if (!auditId || (!canDownloadNf && !canDownloadPay)) return null;
+                  return (
+                    <div className="border-t border-line p-8">
+                      <h3 className="text-[11px] font-bold uppercase tracking-widest mb-4 text-primary flex items-center gap-2">
+                        <FileDown size={13} /> Exportar Documentos
+                      </h3>
+                      <div className="flex gap-3 flex-wrap">
+                        <a
+                          href={canDownloadNf ? docUrl('nf') : undefined}
+                          download
+                          aria-disabled={!canDownloadNf}
+                          className={cn(
+                            'flex items-center gap-2 px-4 py-2.5 rounded border text-[11px] font-bold uppercase tracking-widest transition-all',
+                            canDownloadNf
+                              ? 'bg-sidebar border-line hover:border-primary hover:text-primary text-text-secondary cursor-pointer'
+                              : 'border-line/40 text-text-secondary/30 cursor-not-allowed pointer-events-none'
+                          )}
+                          title={canDownloadNf ? `Baixar PDF — Pág(s): ${selectedItem.nfPage}` : `Página não identificada (${selectedItem.nfPage || 'N/A'})`}
+                        >
+                          <FileDown size={13} />
+                          Doc Fiscal (NF)
+                          {selectedItem.nfPage && selectedItem.nfPage !== 'N/A' && (
+                            <span className="font-mono text-[9px] text-text-secondary/60 ml-1">pág. {selectedItem.nfPage}</span>
+                          )}
+                        </a>
+                        <a
+                          href={canDownloadPay ? docUrl('payment') : undefined}
+                          download
+                          aria-disabled={!canDownloadPay}
+                          className={cn(
+                            'flex items-center gap-2 px-4 py-2.5 rounded border text-[11px] font-bold uppercase tracking-widest transition-all',
+                            canDownloadPay
+                              ? 'bg-sidebar border-line hover:border-primary hover:text-primary text-text-secondary cursor-pointer'
+                              : 'border-line/40 text-text-secondary/30 cursor-not-allowed pointer-events-none'
+                          )}
+                          title={canDownloadPay ? `Baixar PDF — Pág(s): ${selectedItem.paymentPage}` : `Página não identificada (${selectedItem.paymentPage || 'N/A'})`}
+                        >
+                          <FileDown size={13} />
+                          Comprovante de Pagamento
+                          {selectedItem.paymentPage && selectedItem.paymentPage !== 'N/A' && (
+                            <span className="font-mono text-[9px] text-text-secondary/60 ml-1">pág. {selectedItem.paymentPage}</span>
+                          )}
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Reanálise individual + Anotação do auditor */}
                 <div className="grid grid-cols-2 gap-0 border-t border-line">
