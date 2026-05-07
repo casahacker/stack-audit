@@ -423,6 +423,33 @@ const [a11yTheme, setA11yTheme] = useState<A11yTheme>(() => {
   // ── #56: Peek panel ──────────────────────────────────────────────────────────
   const [peekItem, setPeekItem] = useState<AuditItem | null>(null);
 
+  // ── Computed data (must be before useEffects that reference them) ─────────────
+  const diligencedItems = lastAuditResult?.items.filter(i => i.status === 'Pendente' || i.status === 'Ressalva') ?? [];
+
+  const filteredItems = (() => {
+    let items = (lastAuditResult?.items ?? []).filter(item => {
+      const matchesStatus = statusFilter === 'Todos' || item.status === statusFilter;
+      if (!matchesStatus) return false;
+      if (reviewFilter && !item.needsReview) return false;
+      if (!rapcSearch) return true;
+      const q = rapcSearch.toLowerCase();
+      return [item.description, item.activity, item.entity, item.docId, item.taxId, item.date, String(item.value), item.status, item.nfPage, item.paymentPage, item.observations]
+        .some(v => String(v || '').toLowerCase().includes(q));
+    });
+    if (sortBy) {
+      items = [...items].sort((a: any, b: any) => {
+        let va = a[sortBy], vb = b[sortBy];
+        if (sortBy === 'value') { va = Number(va) || 0; vb = Number(vb) || 0; }
+        else if (sortBy === 'date') { va = new Date(va?.split('/').reverse().join('-') || 0).getTime(); vb = new Date(vb?.split('/').reverse().join('-') || 0).getTime(); }
+        else { va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase(); }
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return items;
+  })();
+
   // ── #18: apiFetch — wrapper that redirects to login on 401 ──────────────────
   const apiFetch = useCallback(async (url: string, opts?: RequestInit) => {
     const r = await fetch(url, opts);
@@ -1710,33 +1737,6 @@ ${item.auditorNote ? `<div class="section"><h2>Anotação do Auditor</h2><div cl
   if (!user) return <LoginScreen errorParam={errorParam} />;
 
   const canStartAudit = !!files.budget && !!files.report && !!files.invoices && !!files.payments && !!metadata.organization && !!metadata.contractNumber && periodValid;
-
-  // ── Computed data ─────────────────────────────────────────────────────────────
-  const diligencedItems = lastAuditResult?.items.filter(i => i.status === 'Pendente' || i.status === 'Ressalva') ?? [];
-
-  const filteredItems = (() => {
-    let items = (lastAuditResult?.items ?? []).filter(item => {
-      const matchesStatus = statusFilter === 'Todos' || item.status === statusFilter;
-      if (!matchesStatus) return false;
-      if (reviewFilter && !item.needsReview) return false;
-      if (!rapcSearch) return true;
-      const q = rapcSearch.toLowerCase();
-      return [item.description, item.activity, item.entity, item.docId, item.taxId, item.date, String(item.value), item.status, item.nfPage, item.paymentPage, item.observations]
-        .some(v => String(v || '').toLowerCase().includes(q));
-    });
-    if (sortBy) {
-      items = [...items].sort((a: any, b: any) => {
-        let va = a[sortBy], vb = b[sortBy];
-        if (sortBy === 'value') { va = Number(va) || 0; vb = Number(vb) || 0; }
-        else if (sortBy === 'date') { va = new Date(va?.split('/').reverse().join('-') || 0).getTime(); vb = new Date(vb?.split('/').reverse().join('-') || 0).getTime(); }
-        else { va = String(va || '').toLowerCase(); vb = String(vb || '').toLowerCase(); }
-        if (va < vb) return sortDir === 'asc' ? -1 : 1;
-        if (va > vb) return sortDir === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-    return items;
-  })();
 
   return (
     <>
